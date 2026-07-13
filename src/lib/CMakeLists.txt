@@ -1,0 +1,2 @@
+add_subdirectory(jsonrpclib)
+add_subdirectory(fastcgi)
