@@ -5,7 +5,7 @@
 #include "../jsonrpclib/transport_udp.h"
 #include "../jsonrpclib/jsonrpc.h"
 
-extern bool keep_running;
+extern std::atomic_bool keep_running;
 extern HostDirectory host_directory;
 
 void listener_thread(u_int16_t port) {

@@ -11,7 +11,7 @@
 #include <thread>
 #include <unistd.h>
 
-extern bool keep_running;
+extern std::atomic_bool keep_running;
 
 static Json::Value get_addresses(const std::string &ifname) {
   struct ifaddrs *ifaddr, *ifa;

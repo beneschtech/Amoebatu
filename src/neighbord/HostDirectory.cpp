@@ -4,7 +4,7 @@
 
 #include "HostDirectory.h"
 
-extern bool keep_running;
+extern std::atomic_bool keep_running;
 HostDirectory::HostDirectory()
 {
   m_hosts.push_back(Host{"localhost","127.0.0.1"});

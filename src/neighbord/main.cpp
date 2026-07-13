@@ -13,7 +13,7 @@ static u_int16_t s_bcast_port = 26781;
 static u_int32_t s_interval = 15;
 static std::string s_ifname;
 
-bool keep_running = true;
+std::atomic_bool keep_running = true;
 HostDirectory host_directory;
 
 bool parse_args(int argc, char* argv[]);
