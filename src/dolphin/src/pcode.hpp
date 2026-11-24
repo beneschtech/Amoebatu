@@ -168,6 +168,7 @@ struct PCode {
     std::vector<int> lines;          ///< Source line per instruction.
     std::vector<Value> consts;       ///< K[]. String literals are uncounted references into the AST.
     std::vector<std::string> constKeys;   ///< Precomputed dict keys for INDEXK (parallel to consts; empty if none).
+    std::vector<uint64_t> constHashes;    ///< Dict::hashKey() of each constKeys entry.
     std::vector<std::string> names;  ///< N[]: global, attribute and exception class names, format specs.
     std::vector<std::string> regNames;    ///< Local names per register (for errors and the disassembler).
     std::vector<CallSite> calls;

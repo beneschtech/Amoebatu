@@ -55,20 +55,38 @@ struct List { std::vector<Value> items; };
  * @brief Mutable, insertion-ordered dictionary.
  *
  * Entries live in a vector, in insertion order, which is also the iteration
- * order (as in Python 3.7+). @c index maps each key's canonical form (see
- * dictKey()) to its position. Deleting an entry is O(n) because the index is
- * rebuilt. Fine for M0; a tombstone scheme can replace it if profiling says so.
+ * order (as in Python 3.7+). Each entry's canonical key (see dictKey()) and
+ * its hash are kept alongside, so a lookup whose hash is already known (a
+ * constant key: `r["station"]`, hashed once by the parser) hashes nothing.
+ *
+ * Small dicts (up to kLinear entries, which covers most records) are searched
+ * by scanning the stored hashes: a few cache-friendly comparisons, no table.
+ * Bigger ones add an open-addressing table of entry positions (linear
+ * probing, at most half full). Deleting an entry is O(n) because the table is
+ * rebuilt; a tombstone scheme can replace that if profiling says so.
  */
 struct Dict {
+    static constexpr size_t kLinear = 8;               ///< Up to this many entries: no table.
     std::vector<std::pair<Value, Value>> entries;     ///< (key, value) in insertion order.
-    std::unordered_map<std::string, size_t> index;    ///< Canonical key → position in @c entries.
+    std::vector<std::string> ckeys;                   ///< Canonical key per entry.
+    std::vector<uint64_t> hashes;                     ///< hashKey() of each canonical key.
+    std::vector<int32_t> table;                       ///< Entry positions, -1 = empty; empty while small.
 
+    /// @brief The hash used for canonical keys (compute once for a constant key).
+    static uint64_t hashKey(const std::string& ck);
     /// @brief Position of the entry with canonical key @p ck, or -1.
-    long find(const std::string& ck) const;
+    long find(const std::string& ck) const { return find(ck, hashKey(ck)); }
+    /// @brief Same, with @p ck's hash already known.
+    long find(const std::string& ck, uint64_t h) const;
     /// @brief Insert or overwrite. A new key goes at the end; an existing key keeps its position.
-    void set(const std::string& ck, const Value& key, const Value& value);
-    /// @brief Remove the entry at @p pos and rebuild the index.
+    void set(const std::string& ck, const Value& key, const Value& value) { set(ck, hashKey(ck), key, value); }
+    /// @brief Same, with @p ck's hash already known.
+    void set(const std::string& ck, uint64_t h, const Value& key, const Value& value);
+    /// @brief Remove the entry at @p pos and rebuild the table.
     void erase(size_t pos);
+
+private:
+    void rebuildTable();
 };
 
 /// @brief A user-defined function: a pointer back into the AST.

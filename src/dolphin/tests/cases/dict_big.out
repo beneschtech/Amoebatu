@@ -1,0 +1,14 @@
+0 0 0 False False
+1 1 0 False False
+8 8 0 True False
+9 9 0 True False
+16 16 0 True False
+17 17 0 True False
+33 33 0 True False
+100 100 0 True False
+1000 1000 0 True False
+26 7371 ['k1', 'k2', 'k4', 'k5', 'k7', 'k8'] False True
+['k38', 'k3', 'new'] back gone 49
+{'k35': 1225, 'k37': 1369, 'k38': 1444, 'k3': 'back', 'new': 'x'}
+22 bool bool bool two 19
+False False False 21

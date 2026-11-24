@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <iostream>
 #include <mutex>
@@ -1116,7 +1117,7 @@ Value Interp::eval(const Expr& e, Frame& f) {
         auto& ix = static_cast<const Index&>(e);
         Value obj = eval(*ix.obj, f);
         if (ix.hasConstKey && obj.isDict()) {   // r["station"]: key precomputed by the parser
-            long pos = obj.d().find(ix.constKey);
+            long pos = obj.d().find(ix.constKey, ix.constHash);
             if (pos >= 0) return obj.d().entries[static_cast<size_t>(pos)].second;
         }
         return subscript(obj, *ix.index, f, e.line);   // also raises the KeyError
@@ -1838,7 +1839,7 @@ Value Interp::execPcode(const PCode& p, Frame& f, Value* R, uint8_t* B) {
                 case OpCode::FORNEXT: {
                     Iter& it = iters[ins::b(w)];
                     if (it.i < it.items.size()) {
-                        R[a] = it.items[it.i++];
+                        R[a] = std::move(it.items[it.i++]);   // the snapshot is ours; no copy
                         B[a] = 1;
                         ++pc;   // skip the exit jump
                     } else {
@@ -1871,7 +1872,7 @@ Value Interp::execPcode(const PCode& p, Frame& f, Value* R, uint8_t* B) {
                 case OpCode::INDEXK: {
                     unsigned k = ins::bx(w);
                     if (R[a].isDict()) {
-                        long pos = R[a].d().find(p.constKeys[k]);
+                        long pos = R[a].d().find(p.constKeys[k], p.constHashes[k]);
                         if (pos >= 0) {
                             Value r = R[a].d().entries[static_cast<size_t>(pos)].second;
                             R[a] = std::move(r);
@@ -1965,7 +1966,7 @@ Value Interp::execPcode(const PCode& p, Frame& f, Value* R, uint8_t* B) {
                     B[a] = 1;
                     break;
                 }
-                case OpCode::RETURN: return R[a];
+                case OpCode::RETURN: return std::move(R[a]);   // the frame ends: nothing reads it again
                 case OpCode::RETURNNIL: return Value();
                 case OpCode::RAISE: {
                     const Value& v = R[a];

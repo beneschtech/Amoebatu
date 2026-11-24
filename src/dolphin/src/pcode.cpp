@@ -125,6 +125,7 @@ private:
     unsigned konst(Value v, std::string key = "") {
         if (p_.consts.size() >= 65536) throw CannotCompile{};
         p_.consts.push_back(std::move(v));
+        p_.constHashes.push_back(key.empty() ? 0 : Dict::hashKey(key));
         p_.constKeys.push_back(std::move(key));
         return static_cast<unsigned>(p_.consts.size() - 1);
     }

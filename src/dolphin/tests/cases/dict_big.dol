@@ -1,0 +1,41 @@
+# Dicts past the small-dict size (8 entries), through several table
+# resizes, with deletion and re-insertion. Order and lookups must match CPython.
+
+def build(n):
+    d = {}
+    for i in range(n):
+        d["k" + str(i)] = i * i
+    return d
+
+def check(d, n):
+    bad = 0
+    for i in range(n):
+        if d["k" + str(i)] != i * i:
+            bad += 1
+    return bad
+
+def main():
+    for n in [0, 1, 8, 9, 16, 17, 33, 100, 1000]:
+        d = build(n)
+        print(n, len(d), check(d, n), "k5" in d, "nope" in d)
+    d = build(40)
+    removed = [d.pop("k" + str(i)) for i in range(0, 40, 3)]
+    total = 0
+    for r in removed:
+        total += r
+    print(len(d), total, [k for k in d][:6], "k3" in d, "k4" in d)
+    d["k3"] = "back"
+    d["new"] = "x"
+    print([k for k in d][-3:], d["k3"], d.get("k6", "gone"), d.get("k7", "gone"))
+    while len(d) > 5:
+        d.pop([k for k in d][0])
+    print(d)
+    m = {1: "int"}
+    m[1.0] = "float"
+    m[True] = "bool"
+    m[2] = "two"
+    for i in range(20):
+        m[i + 100] = i
+    print(len(m), m[1], m[1.0], m[True], m[2], m[119])
+    m.pop(1)
+    print(1 in m, True in m, 1.0 in m, len(m))

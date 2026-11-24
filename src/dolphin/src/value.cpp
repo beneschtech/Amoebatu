@@ -60,29 +60,61 @@ std::string utf8Encode(uint32_t cp) {
     return o;
 }
 
-long Dict::find(const std::string& ck) const {
-    auto it = index.find(ck);
-    return it == index.end() ? -1 : static_cast<long>(it->second);
+uint64_t Dict::hashKey(const std::string& ck) { return std::hash<std::string>{}(ck); }
+
+long Dict::find(const std::string& ck, uint64_t h) const {
+    if (table.empty()) {   // small: scan the stored hashes
+        for (size_t i = 0; i < hashes.size(); ++i)
+            if (hashes[i] == h && ckeys[i] == ck) return static_cast<long>(i);
+        return -1;
+    }
+    size_t mask = table.size() - 1;
+    for (size_t s = h & mask;; s = (s + 1) & mask) {
+        int32_t pos = table[s];
+        if (pos < 0) return -1;
+        if (hashes[static_cast<size_t>(pos)] == h && ckeys[static_cast<size_t>(pos)] == ck) return pos;
+    }
 }
 
-void Dict::set(const std::string& ck, const Value& key, const Value& value) {
-    auto it = index.find(ck);
-    if (it != index.end()) {
-        entries[it->second].second = value;
+void Dict::set(const std::string& ck, uint64_t h, const Value& key, const Value& value) {
+    long pos = find(ck, h);
+    if (pos >= 0) {
+        entries[static_cast<size_t>(pos)].second = value;
         return;
     }
-    index.emplace(ck, entries.size());
     entries.emplace_back(key, value);
+    ckeys.push_back(ck);
+    hashes.push_back(h);
+    if (entries.size() > kLinear) {
+        if (table.size() < entries.size() * 2) {
+            rebuildTable();   // grow (or create) at most half full
+        } else {
+            size_t mask = table.size() - 1;
+            size_t s = h & mask;
+            while (table[s] >= 0) s = (s + 1) & mask;
+            table[s] = static_cast<int32_t>(entries.size() - 1);
+        }
+    }
+}
+
+void Dict::rebuildTable() {
+    size_t cap = 16;
+    while (cap < entries.size() * 2) cap *= 2;
+    table.assign(cap, -1);
+    size_t mask = cap - 1;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        size_t s = hashes[i] & mask;
+        while (table[s] >= 0) s = (s + 1) & mask;
+        table[s] = static_cast<int32_t>(i);
+    }
 }
 
 void Dict::erase(size_t pos) {
     entries.erase(entries.begin() + static_cast<long>(pos));
-    index.clear();
-    for (size_t i = 0; i < entries.size(); ++i) {
-        std::string ck;
-        dictKey(entries[i].first, ck);
-        index.emplace(std::move(ck), i);
-    }
+    ckeys.erase(ckeys.begin() + static_cast<long>(pos));
+    hashes.erase(hashes.begin() + static_cast<long>(pos));
+    if (entries.size() > kLinear) rebuildTable();
+    else table.clear();
 }
 
 // A type tag plus the value. Integral floats use the int form so 1.0 finds 1;
