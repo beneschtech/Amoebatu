@@ -31,7 +31,7 @@ namespace dolphin {
 struct Expr {
     /// @brief Concrete node type; tells you which subclass to `static_cast` to.
     enum class K { Int, Float, Str, FStr, Bytes, Bool, None, Name, Unary, Binary, BoolOp, Compare,
-                   Call, Index, Slice, Attr, List, ListComp, Dict };
+                   Call, Index, Slice, Attr, List, ListComp };
     K k;       ///< Node kind.
     int line;  ///< Source line.
     Expr(K k, int line) : k(k), line(line) {}
@@ -39,101 +39,20 @@ struct Expr {
 };
 using ExprP = std::unique_ptr<Expr>;  ///< Owning pointer to an expression.
 
-/**
- * @brief Operator, decoded once by the parser.
- *
- * Nodes keep the spelling too (for `--ast` and error messages), but the
- * interpreter dispatches on this code. Comparing operator strings on every
- * evaluation cost about a tenth of all instructions.
- */
-enum class Op : uint8_t {
-    Add, Sub, Mul, Div, FloorDiv, Mod, Pow, BitAnd, BitOr, BitXor, Shl, Shr,   ///< Binary arithmetic and bitwise.
-    Eq, Ne, Lt, Le, Gt, Ge, In, NotIn,                                         ///< Comparisons.
-    Not, Neg, Pos, Invert,                                                     ///< Unary (`not - + ~`).
-    And, Or,                                                                   ///< Short-circuit.
-};
-/// @brief Binary/comparison/boolean operator for a spelling (`+`, `not in`, `and`, ...).
-///        Unary operators: see unaryOp().
-Op binaryOp(const std::string& spelling);
-/// @brief Unary operator for a spelling: `not`, `-`, `+` or `~`.
-Op unaryOp(const std::string& spelling);
-/// @brief The operator's source spelling.
-const char* opSpelling(Op op);
-
-/**
- * @brief Built-in method, decoded once by the parser from `obj.name`.
- *
- * Method calls dispatch on this code instead of looking the name up and
- * comparing strings on every call. Method::None means "not a built-in method
- * name" (the attribute is then looked up the slow way, which reports errors).
- */
-enum class Method : uint8_t {
-    None,
-    upper, lower, strip, lstrip, rstrip, split, join, startswith, endswith, find, replace, count, isdigit, isalpha, isspace, encode, decode, hex, append, pop, extend, index, get, keys, values,
-};
-/// @brief The Method named @p name, or Method::None.
-Method methodByName(const std::string& name);
-/// @brief A method's name (empty for Method::None).
-const char* methodName(Method m);
-
 /// @brief Integer literal. Range is int64.
 struct IntLit : Expr { int64_t v; IntLit(int l, int64_t v) : Expr(K::Int, l), v(v) {} };
 /// @brief Floating-point literal (IEEE double).
 struct FloatLit : Expr { double v; FloatLit(int l, double v) : Expr(K::Float, l), v(v) {} };
 /// @brief String literal; @c v is UTF-8 with escapes already decoded.
-struct Str;   // value.hpp
-/**
- * @brief String literal; @c v is UTF-8 with escapes already decoded.
- *
- * The runtime string is built once, here, and every evaluation hands out an
- * uncounted reference to it (Value::borrowedStr()). Allocating a fresh string
- * per evaluation was 1.6 million allocations on the METAR benchmark, and a
- * shared counted copy would have every thread bumping the same counter.
- * Values from literals therefore must not outlive the AST (the Module), which
- * owns every Interp.
- */
-struct StrLit : Expr {
-    std::string v;
-    std::shared_ptr<const Str> str;   ///< The runtime string (owned here).
-    StrLit(int l, std::string v);     // ast.cpp: needs the complete Str
-};
+struct StrLit : Expr { std::string v; StrLit(int l, std::string v) : Expr(K::Str, l), v(std::move(v)) {} };
 /// @brief bytes literal; @c v holds raw bytes.
 struct BytesLit : Expr { std::string v; BytesLit(int l, std::string v) : Expr(K::Bytes, l), v(std::move(v)) {} };
 /// @brief `True` or `False`.
 struct BoolLit : Expr { bool v; BoolLit(int l, bool v) : Expr(K::Bool, l), v(v) {} };
 /// @brief `None`.
 struct NoneLit : Expr { explicit NoneLit(int l) : Expr(K::None, l) {} };
-struct Def;
-
-/**
- * @brief What a name refers to, decided by the resolver (resolver.hpp).
- *
- * Resolution is static and follows Python's rule: a name assigned anywhere
- * in a function body is local to the whole function.
- */
-enum class Bind {
-    Unresolved,  ///< Not yet resolved (only before resolveNames() runs).
-    Local,       ///< Parameter or local variable of the enclosing function; see Name::slot.
-    Global,      ///< Module-level variable.
-    Function,    ///< Module-level name bound only by a single `def`; see Name::def.
-    Builtin,     ///< Builtin function (see builtinNeeds()).
-    Exception,   ///< Builtin exception class.
-};
-
-/// @brief Short name of a binding kind, for `--ast`.
-const char* bindName(Bind b);
-
 /// @brief A variable or function name.
-struct Name : Expr {
-    std::string id;
-    Bind bind = Bind::Unresolved;  ///< Set by the resolver.
-    int slot = -1;                 ///< Local slot number when bind == Local (parameters come first).
-    /// The function this name calls, when statically known: set for Bind::Function,
-    /// and for a Local bound only by a nested `def`. Lets the analyzer follow the call.
-    const Def* def = nullptr;
-    unsigned needs = 0;            ///< For Bind::Builtin: the builtin's declared needs.
-    Name(int l, std::string id) : Expr(K::Name, l), id(std::move(id)) {}
-};
+struct Name : Expr { std::string id; Name(int l, std::string id) : Expr(K::Name, l), id(std::move(id)) {} };
 
 /**
  * @brief One piece of an f-string: either literal text or an expression field.
@@ -152,26 +71,22 @@ struct FStr : Expr { std::vector<FStrPart> parts; explicit FStr(int l) : Expr(K:
 /// @brief Prefix operator: `-x`, `+x`, `~x`, `not x`.
 struct Unary : Expr {
     std::string op;  ///< One of `-`, `+`, `~`, `not`.
-    Op code;         ///< Decoded @c op.
     ExprP operand;
-    Unary(int l, std::string op, ExprP e)
-        : Expr(K::Unary, l), op(std::move(op)), code(unaryOp(this->op)), operand(std::move(e)) {}
+    Unary(int l, std::string op, ExprP e) : Expr(K::Unary, l), op(std::move(op)), operand(std::move(e)) {}
 };
 /// @brief Arithmetic or bitwise infix operator, e.g. `a + b`, `a ** b`, `a << b`.
 struct Binary : Expr {
     std::string op;  ///< Operator spelling: `+ - * / // % ** & | ^ << >>`.
-    Op code;         ///< Decoded @c op.
     ExprP lhs, rhs;
     Binary(int l, std::string op, ExprP a, ExprP b)
-        : Expr(K::Binary, l), op(std::move(op)), code(binaryOp(this->op)), lhs(std::move(a)), rhs(std::move(b)) {}
+        : Expr(K::Binary, l), op(std::move(op)), lhs(std::move(a)), rhs(std::move(b)) {}
 };
 /// @brief Short-circuit `and` / `or`. Returns one of its operands, as in Python.
 struct BoolOp : Expr {
     std::string op;  ///< `and` or `or`.
-    Op code;         ///< Decoded @c op.
     ExprP lhs, rhs;
     BoolOp(int l, std::string op, ExprP a, ExprP b)
-        : Expr(K::BoolOp, l), op(std::move(op)), code(binaryOp(this->op)), lhs(std::move(a)), rhs(std::move(b)) {}
+        : Expr(K::BoolOp, l), op(std::move(op)), lhs(std::move(a)), rhs(std::move(b)) {}
 };
 /**
  * @brief Comparison chain: `a < b <= c` means `a < b and b <= c`, with each
@@ -181,13 +96,7 @@ struct Compare : Expr {
     ExprP first;  ///< Leftmost operand.
     /// Each following (operator, operand) pair. Operators: `== != < <= > >= in` and `not in`.
     std::vector<std::pair<std::string, ExprP>> rest;
-    std::vector<Op> ops;   ///< Decoded operators, parallel to @c rest. Use add() to append.
     Compare(int l, ExprP f) : Expr(K::Compare, l), first(std::move(f)) {}
-    /// @brief Append an (operator, operand) pair.
-    void add(std::string op, ExprP e) {
-        ops.push_back(binaryOp(op));
-        rest.emplace_back(std::move(op), std::move(e));
-    }
 };
 /// @brief Function or method call with positional and keyword arguments.
 struct Call : Expr {
@@ -204,27 +113,16 @@ struct Slice : Expr {
 /// @brief Subscript `obj[index]` or slice `obj[lo:hi]` (index is then a Slice).
 struct Index : Expr {
     ExprP obj, index;
-    /// When @c index is a str or int literal: its dict key (dictKey()), so
-    /// `r["station"]` on a dict looks up without building anything.
-    std::string constKey;
-    bool hasConstKey = false;
-    Index(int l, ExprP o, ExprP i);   // ast.cpp
+    Index(int l, ExprP o, ExprP i) : Expr(K::Index, l), obj(std::move(o)), index(std::move(i)) {}
 };
 /// @brief Attribute access `obj.name`. Today only methods and exception fields.
 struct Attr : Expr {
     ExprP obj;
     std::string name;
-    Method method;   ///< methodByName(name): Method::None if it isn't a built-in method name.
-    Attr(int l, ExprP o, std::string n)
-        : Expr(K::Attr, l), obj(std::move(o)), name(std::move(n)), method(methodByName(this->name)) {}
+    Attr(int l, ExprP o, std::string n) : Expr(K::Attr, l), obj(std::move(o)), name(std::move(n)) {}
 };
 /// @brief List display `[a, b, c]`.
 struct ListLit : Expr { std::vector<ExprP> elems; explicit ListLit(int l) : Expr(K::List, l) {} };
-/// @brief Dict display `{k: v, ...}`. Keys and values are evaluated left to right.
-struct DictLit : Expr {
-    std::vector<std::pair<ExprP, ExprP>> items;  ///< (key, value) in source order.
-    explicit DictLit(int l) : Expr(K::Dict, l) {}
-};
 /**
  * @brief List comprehension `[elt for var in iter if cond]`.
  *
@@ -234,7 +132,6 @@ struct DictLit : Expr {
 struct ListComp : Expr {
     ExprP elt;        ///< Element expression.
     std::string var;  ///< Loop variable.
-    int slot = -1;    ///< Local slot of @c var (-1 at module level, where it's a global).
     ExprP iter;       ///< Iterable.
     ExprP cond;       ///< Optional filter; null if absent.
     explicit ListComp(int l) : Expr(K::ListComp, l) {}
@@ -268,8 +165,7 @@ struct Assign : Stmt {
 /// @brief Augmented assignment, e.g. `off += n`.
 struct AugAssign : Stmt {
     ExprP target;
-    std::string op;      ///< Operator without the `=`, e.g. `+`.
-    Op code = Op::Add;   ///< Decoded @c op (set with @c op by the parser).
+    std::string op;  ///< Operator without the `=`, e.g. `+`.
     ExprP value;
     AugAssign(int l) : Stmt(K::AugAssign, l) {}
 };
@@ -284,7 +180,6 @@ struct While : Stmt { ExprP cond; Block body; explicit While(int l) : Stmt(K::Wh
 /// @brief `for var in iter:` loop.
 struct For : Stmt {
     std::string var;
-    int slot = -1;   ///< Local slot of @c var (-1 at module level).
     ExprP iter;
     Block body;
     explicit For(int l) : Stmt(K::For, l) {}
@@ -315,7 +210,6 @@ std::string needsToString(unsigned n);
 /// @brief One function parameter.
 struct Param {
     std::string name;
-    int slot = -1;  ///< Local slot; parameter i gets slot i.
     ExprP annot;  ///< Type annotation, or null. Parsed, not yet checked.
     ExprP dflt;   ///< Default value expression, or null.
 };
@@ -326,20 +220,6 @@ struct Def : Stmt {
     ExprP ret;                   ///< Return annotation (`-> type`), or null.
     Block body;
     unsigned needs = NeedNone;   ///< Inferred by analyzeNeeds(); a Need bitmask.
-    int numLocals = 0;           ///< Parameters + locals, set by the resolver.
-    /// May this function mutate an object it didn't create (an argument, a
-    /// global, or an alias of either)? Set by the analyzer. A function that
-    /// does must run inline: on another thread it would race with its caller.
-    bool mutatesArgs = false;
-    /// Which parameters (by position) the function may mutate. Callers use it
-    /// to know which of their arguments a call can change.
-    std::vector<bool> mutatedParams;
-    /// May mutate something other than its parameters: a global, or an object
-    /// the analyzer couldn't trace. Callers then treat every argument as mutated.
-    bool mutatesOther = false;
-    /// Can a call to this function run on another thread? (pure and doesn't mutate its arguments)
-    bool parallelSafe() const { return needs == NeedNone && !mutatesArgs; }
-    int slot = -1;               ///< Slot of this def's name in the enclosing function (-1 at module level).
     explicit Def(int l) : Stmt(K::Def, l) {}
 };
 /// @brief `return [value]`. A null value returns None.
@@ -354,7 +234,6 @@ struct Pass : Stmt { explicit Pass(int l) : Stmt(K::Pass, l) {} };
 struct Handler {
     std::string cls;  ///< Exception class name to match; empty for a bare `except:`.
     std::string as;   ///< Name bound to the exception (`as e`); empty if none.
-    int asSlot = -1;  ///< Local slot of @c as (-1 at module level or if none).
     Block body;
     int line = 0;
 };
@@ -374,16 +253,12 @@ struct Module {
 };
 
 /**
- * @brief Print the tree in the style of `clang -Xclang -ast-dump`
- *        (`dolphin --ast`): one node per line, children indented under
- *        `|-` / `` `- `` connectors, with line numbers, resolved bindings and
- *        inferred needs.
+ * @brief Print the tree as indented S-expressions (`dolphin --ast`).
  *
  * The format is for humans and tests, not a stable interchange format.
  */
 void dump(const Module& m, std::ostream& os);
-/// @brief An expression rendered back as compact source text, e.g. `list[bytes]`.
-///        Used for type annotations in the dump.
-std::string exprToSource(const Expr& e);
+/// @brief One expression as an S-expression string, e.g. `(+ a (* b c))`.
+std::string dump(const Expr& e);
 
 } // namespace dolphin

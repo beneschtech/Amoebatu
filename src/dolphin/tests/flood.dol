@@ -1,6 +1,0 @@
-# Prints far more than the output queue's 8 MB limit, to exercise backpressure.
-def main():
-    pad = "x" * 60
-    for i in range(250000):
-        print(f"{i:07d} {pad}")
-    print("done")

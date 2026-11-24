@@ -60,58 +60,6 @@ std::string utf8Encode(uint32_t cp) {
     return o;
 }
 
-long Dict::find(const std::string& ck) const {
-    auto it = index.find(ck);
-    return it == index.end() ? -1 : static_cast<long>(it->second);
-}
-
-void Dict::set(const std::string& ck, const Value& key, const Value& value) {
-    auto it = index.find(ck);
-    if (it != index.end()) {
-        entries[it->second].second = value;
-        return;
-    }
-    index.emplace(ck, entries.size());
-    entries.emplace_back(key, value);
-}
-
-void Dict::erase(size_t pos) {
-    entries.erase(entries.begin() + static_cast<long>(pos));
-    index.clear();
-    for (size_t i = 0; i < entries.size(); ++i) {
-        std::string ck;
-        dictKey(entries[i].first, ck);
-        index.emplace(std::move(ck), i);
-    }
-}
-
-// A type tag plus the value. Integral floats use the int form so 1.0 finds 1;
-// other floats use their bit pattern. Function identity uses the Def address.
-bool dictKey(const Value& v, std::string& out) {
-    if (v.isNone()) { out = "N"; return true; }
-    if (v.is<bool>()) { out = v.as<bool>() ? "I1" : "I0"; return true; }
-    if (v.isInt()) { out = "I" + std::to_string(v.as<int64_t>()); return true; }
-    if (v.isFloat()) {
-        double d = v.as<double>();
-        if (std::isfinite(d) && d == std::floor(d) && d >= -9.2e18 && d <= 9.2e18) {
-            out = "I" + std::to_string(static_cast<int64_t>(d));
-        } else {
-            uint64_t bits;
-            std::memcpy(&bits, &d, sizeof bits);
-            out = "F" + std::to_string(bits);
-        }
-        return true;
-    }
-    if (v.isStr()) { out = "S" + v.s().s; return true; }
-    if (v.isBytes()) { out = "B" + v.b().b; return true; }
-    if (v.is<std::shared_ptr<const Function>>()) {
-        out = "P" + std::to_string(reinterpret_cast<uintptr_t>(v.as<std::shared_ptr<const Function>>()->def));
-        return true;
-    }
-    if (v.is<std::shared_ptr<const ExcClass>>()) { out = "C" + v.as<std::shared_ptr<const ExcClass>>()->name; return true; }
-    return false;   // list, dict, builtins, methods, exception instances
-}
-
 std::string typeName(const Value& v) {
     struct V {
         std::string operator()(NoneT) const { return "None"; }
@@ -121,13 +69,11 @@ std::string typeName(const Value& v) {
         std::string operator()(const std::shared_ptr<const Str>&) const { return "str"; }
         std::string operator()(const std::shared_ptr<const Bytes>&) const { return "bytes"; }
         std::string operator()(const std::shared_ptr<List>&) const { return "list"; }
-        std::string operator()(const std::shared_ptr<Dict>&) const { return "dict"; }
         std::string operator()(const std::shared_ptr<const Function>&) const { return "function"; }
         std::string operator()(const std::shared_ptr<const Builtin>&) const { return "builtin"; }
         std::string operator()(const std::shared_ptr<const ExcClass>&) const { return "exception class"; }
         std::string operator()(const std::shared_ptr<const ExcValue>& e) const { return e->cls; }
         std::string operator()(const std::shared_ptr<const BoundMethod>&) const { return "method"; }
-        std::string operator()(const std::shared_ptr<Future>&) const { return "future"; }
     };
     return std::visit(V{}, v.v);
 }
@@ -140,7 +86,6 @@ bool truthy(const Value& v) {
     if (v.isStr()) return !v.s().s.empty();
     if (v.isBytes()) return !v.b().b.empty();
     if (v.isList()) return !v.l().items.empty();
-    if (v.isDict()) return !v.d().entries.empty();
     return true;
 }
 
@@ -222,21 +167,11 @@ std::string toStr(const Value& v) {
         }
         return o + "]";
     }
-    if (v.isDict()) {
-        std::string o = "{";
-        bool first = true;
-        for (auto& [k, x] : v.d().entries) {
-            if (!first) o += ", ";
-            o += toRepr(k) + ": " + toRepr(x);
-            first = false;
-        }
-        return o + "}";
-    }
     if (v.is<std::shared_ptr<const Function>>()) return "<function " + v.as<std::shared_ptr<const Function>>()->def->name + ">";
     if (v.is<std::shared_ptr<const Builtin>>()) return "<builtin " + v.as<std::shared_ptr<const Builtin>>()->name + ">";
     if (v.is<std::shared_ptr<const ExcClass>>()) return "<class " + v.as<std::shared_ptr<const ExcClass>>()->name + ">";
     if (v.is<std::shared_ptr<const ExcValue>>()) return v.as<std::shared_ptr<const ExcValue>>()->msg;
-    if (v.is<std::shared_ptr<const BoundMethod>>()) return "<method " + std::string(methodName(v.as<std::shared_ptr<const BoundMethod>>()->method)) + ">";
+    if (v.is<std::shared_ptr<const BoundMethod>>()) return "<method " + v.as<std::shared_ptr<const BoundMethod>>()->name + ">";
     return "?";
 }
 
@@ -264,18 +199,6 @@ bool valuesEqual(const Value& a, const Value& b) {
         if (x.size() != y.size()) return false;
         for (size_t i = 0; i < x.size(); ++i)
             if (!valuesEqual(x[i], y[i])) return false;
-        return true;
-    }
-    if (a.isDict() && b.isDict()) {   // same keys mapping to equal values; order doesn't matter
-        auto& x = a.d();
-        auto& y = b.d();
-        if (x.entries.size() != y.entries.size()) return false;
-        for (auto& [k, val] : x.entries) {
-            std::string ck;
-            dictKey(k, ck);
-            long pos = y.find(ck);
-            if (pos < 0 || !valuesEqual(val, y.entries[static_cast<size_t>(pos)].second)) return false;
-        }
         return true;
     }
     if (a.v.index() != b.v.index()) return false;

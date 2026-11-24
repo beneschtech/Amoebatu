@@ -50,23 +50,20 @@ struct Token {
 
 /**
  * @brief A compile-time error: bad characters, bad indentation, malformed
- *        literals, a parse failure, or (from the resolver) an undefined name.
+ *        literals, or a parse failure.
  *
- * Thrown by the Lexer, the Parser and the resolver. Runtime errors use
- * DolphinError instead, because those travel through the interpreter as
- * Dolphin exceptions.
+ * Thrown by both the Lexer and the Parser. Runtime errors use DolphinError
+ * instead, because those travel through the interpreter as Dolphin exceptions.
  */
 struct SyntaxError : std::runtime_error {
     std::string file;  ///< Source file name, as given on the command line.
     int line;          ///< 1-based line of the error.
-    std::string kind;  ///< Error class shown to the user: `SyntaxError` or `NameError`.
 
     /// @param f    File name.
     /// @param l    Line number.
     /// @param msg  Human-readable message (no file/line prefix).
-    /// @param k    Error class name.
-    SyntaxError(std::string f, int l, const std::string& msg, std::string k = "SyntaxError")
-        : std::runtime_error(msg), file(std::move(f)), line(l), kind(std::move(k)) {}
+    SyntaxError(std::string f, int l, const std::string& msg)
+        : std::runtime_error(msg), file(std::move(f)), line(l) {}
 };
 
 /**
