@@ -178,6 +178,7 @@ StmtP Parser::parseSimpleStmt() {
             a->target = std::move(lhs);
             std::string o = *op;
             a->op = o.substr(0, o.size() - 1);
+            a->code = binaryOp(a->op);
             a->value = parseExpr();
             return a;
         }
@@ -323,7 +324,7 @@ ExprP Parser::parseExpr(int minPrec) {
                     next();   // 'in'
                     op = "not in";
                 }
-                c->rest.emplace_back(op, parseExpr(5));
+                c->add(op, parseExpr(5));
             }
             lhs = std::move(c);
             continue;
@@ -443,19 +444,39 @@ ExprP Parser::parseAtom() {
         next();
         return std::make_unique<FloatLit>(line, v);
     }
-    case Tok::Str: {
-        std::string s = next().text;
-        while (peek().kind == Tok::Str) s += next().text;   // implicit concatenation
-        return std::make_unique<StrLit>(line, std::move(s));
+    case Tok::Str:
+    case Tok::FStr: {
+        // Adjacent string literals concatenate, as in Python: "a" "b" == "ab".
+        // If any piece is an f-string, the result is one f-string whose parts
+        // are the plain pieces as text plus each f-string's parts.
+        std::vector<Token> pieces;
+        bool anyF = false;
+        while (peek().kind == Tok::Str || peek().kind == Tok::FStr) {
+            anyF = anyF || peek().kind == Tok::FStr;
+            pieces.push_back(next());
+        }
+        if (!anyF) {
+            std::string s;
+            for (auto& p : pieces) s += p.text;
+            return std::make_unique<StrLit>(line, std::move(s));
+        }
+        auto f = std::make_unique<FStr>(line);
+        for (auto& p : pieces) {
+            if (p.kind == Tok::Str) {
+                FStrPart part;
+                part.text = p.text;
+                f->parts.push_back(std::move(part));
+            } else {
+                auto sub = parseFString(p);
+                for (auto& part : static_cast<FStr&>(*sub).parts) f->parts.push_back(std::move(part));
+            }
+        }
+        return f;
     }
     case Tok::Bytes: {
         std::string s = next().text;
         while (peek().kind == Tok::Bytes) s += next().text;
         return std::make_unique<BytesLit>(line, std::move(s));
-    }
-    case Tok::FStr: {
-        Token ft = next();
-        return parseFString(ft);
     }
     case Tok::Name: {
         if (t.text == "True") { next(); return std::make_unique<BoolLit>(line, true); }
@@ -471,6 +492,20 @@ ExprP Parser::parseAtom() {
             if (isOp(",")) error("tuples are not supported yet");
             expectOp(")");
             return e;
+        }
+        if (t.text == "{") {   // dict display: {} or {k: v, ...}
+            next();
+            auto d = std::make_unique<DictLit>(line);
+            while (!isOp("}")) {
+                ExprP k = parseExpr();
+                if (!isOp(":")) error("expected ':' in dict display (sets are not supported)");
+                next();
+                ExprP v = parseExpr();
+                d->items.emplace_back(std::move(k), std::move(v));
+                if (!acceptOp(",")) break;
+            }
+            expectOp("}");
+            return d;
         }
         if (t.text == "[") {
             next();

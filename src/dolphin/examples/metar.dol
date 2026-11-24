@@ -1,0 +1,313 @@
+# metar.dol: decode a WMO METAR/SPECI bulletin.
+#
+#   dolphin examples/metar.dol tests/data/metar_bulletin.txt
+#
+# METAR is a good stress test for Dolphin's execution model. Reports vary in
+# length, most groups are optional, their order is only loosely fixed, remarks
+# are free-form, and a report can wrap onto continuation lines. But each report
+# decodes independently, so decode_metar() is pure and `[decode_metar(r) for r
+# in reports]` becomes a parallel map at M2. Only main() blocks (on IO).
+#
+# This file is also valid Python 3. tests/py_oracle.py runs it under CPython
+# to produce the expected output, so the decoder logic is checked against a
+# second implementation of the language.
+
+WX_CODES = ["MI", "PR", "BC", "DR", "BL", "SH", "TS", "FZ",          # descriptors
+            "DZ", "RA", "SN", "SG", "IC", "PL", "GR", "GS", "UP",    # precipitation
+            "BR", "FG", "FU", "VA", "DU", "SA", "HZ", "PY",          # obscuration
+            "PO", "SQ", "FC", "SS", "DS"]                            # other
+COVER = ["FEW", "SCT", "BKN", "OVC", "VV"]
+CLEAR = ["CLR", "SKC", "NSC", "NCD"]
+TRENDS = ["NOSIG", "BECMG", "TEMPO"]
+FRAMING = " \r\x01\x03"   # SOH / ETX and CR from raw WMO feeds
+
+# ---------------------------------------------------------------- bulletin
+
+# Returns [header, reports]: the WMO abbreviated header line and the reports,
+# with continuation lines joined and the '=' terminators removed.
+def split_bulletin(text: str) -> list:
+    header = ""
+    lines = []
+    for raw in text.split("\n"):
+        line = raw.strip(FRAMING)
+        if line == "" or line == "METAR" or line == "SPECI" or line.isdigit():
+            continue
+        if header == "":
+            header = line
+            continue
+        lines.append(line)
+    reports = []
+    for chunk in " ".join(lines).split("="):
+        report = " ".join(chunk.split())   # also collapses the continuation indent
+        if report != "":
+            reports.append(report)
+    return [header, reports]
+
+# ------------------------------------------------------------------ groups
+
+def is_digits(s: str, n: int) -> bool:
+    return len(s) == n and s.isdigit()
+
+# "M02" -> -2, "15" -> 15
+def parse_temp(s: str) -> int:
+    if s.startswith("M"):
+        return -int(s[1:])
+    return int(s)
+
+# "1/4" -> 0.25, "10" -> 10.0
+def parse_number(s: str) -> float:
+    if "/" in s:
+        parts = s.split("/")
+        return int(parts[0]) / int(parts[1])
+    return float(int(s))
+
+def is_weather(g: str) -> bool:
+    body = g
+    if body.startswith("-") or body.startswith("+"):
+        body = body[1:]
+    if body.startswith("VC"):
+        body = body[2:]
+    if body == "" or len(body) % 2 != 0:
+        return False
+    for i in range(0, len(body), 2):
+        if body[i:i + 2] not in WX_CODES:
+            return False
+    return True
+
+# 31008KT, 33009G15KT, 00000KT, VRB03KT. Fills r and returns True, or returns False.
+def parse_wind(g: str, r: dict) -> bool:
+    if not g.endswith("KT") or len(g) < 7:
+        return False
+    body = g[0:len(g) - 2]
+    direction = body[0:3]
+    speed = body[3:]
+    gust = ""
+    if "G" in speed:
+        parts = speed.split("G")
+        speed = parts[0]
+        gust = parts[1]
+    if not (direction == "VRB" or is_digits(direction, 3)):
+        return False
+    if not speed.isdigit() or (gust != "" and not gust.isdigit()):
+        return False
+    if direction == "VRB":
+        r["wind_dir"] = "VRB"
+    else:
+        r["wind_dir"] = int(direction)
+    r["wind_kt"] = int(speed)
+    if gust != "":
+        r["gust_kt"] = int(gust)
+    return True
+
+# --------------------------------------------------------------- remarks
+
+def decode_remarks(groups: list, r: dict):
+    for g in groups:
+        if g == "AO1" or g == "AO2":
+            r["station_type"] = g
+        elif g == "$":
+            r["maintenance"] = True
+        elif len(g) == 9 and g.startswith("T") and g[1:].isdigit():
+            # T01450127: tenths of a degree C, sign digit 1 = negative
+            t = int(g[2:5]) / 10
+            d = int(g[6:9]) / 10
+            if g[1] == "1":
+                t = -t
+            if g[5] == "1":
+                d = -d
+            r["temp_precise"] = t
+            r["dew_precise"] = d
+        elif g.startswith("SLP") and is_digits(g[3:], 3):
+            n = int(g[3:])
+            if n >= 500:
+                r["slp_hpa"] = 900 + n / 10
+            else:
+                r["slp_hpa"] = 1000 + n / 10
+        else:
+            r["remarks"].append(g)
+
+# ---------------------------------------------------------------- report
+
+def decode_metar(report: str) -> dict:
+    r = {"station": "", "day": 0, "hour": 0, "minute": 0, "auto": False, "wind_dir": None,
+         "wind_kt": None, "gust_kt": None, "wind_var": "", "vis_sm": None, "vis_below": False,
+         "rvr": [], "wx": [], "sky": [], "temp_c": None, "dew_c": None, "alt_inhg": None,
+         "temp_precise": None, "dew_precise": None, "slp_hpa": None, "station_type": "",
+         "maintenance": False, "trend": "", "remarks": [], "unparsed": []}
+    groups = report.split()
+    if len(groups) > 0 and (groups[0] == "METAR" or groups[0] == "SPECI"):
+        groups = groups[1:]
+    if len(groups) < 2:
+        raise DecodeError("report too short: " + report)
+    r["station"] = groups[0]
+    t = groups[1]
+    if not (len(t) == 7 and t.endswith("Z") and t[0:6].isdigit()):
+        raise DecodeError(f"{groups[0]}: bad observation time {t}")
+    r["day"] = int(t[0:2])
+    r["hour"] = int(t[2:4])
+    r["minute"] = int(t[4:6])
+
+    i = 2
+    while i < len(groups):
+        g = groups[i]
+        nxt = ""
+        if i + 1 < len(groups):
+            nxt = groups[i + 1]
+        if g == "RMK":
+            decode_remarks(groups[i + 1:], r)
+            break
+        if g == "AUTO" or g == "COR":
+            r["auto"] = r["auto"] or g == "AUTO"
+        elif parse_wind(g, r):
+            pass
+        elif len(g) == 7 and g[3] == "V" and g[0:3].isdigit() and g[4:7].isdigit():
+            r["wind_var"] = g
+        elif g.isdigit() and nxt.endswith("SM") and "/" in nxt:
+            r["vis_sm"] = int(g) + parse_number(nxt[0:len(nxt) - 2])   # "1 1/2SM"
+            i += 1
+        elif g.endswith("SM"):
+            v = g[0:len(g) - 2]
+            if v.startswith("M"):
+                r["vis_below"] = True
+                v = v[1:]
+            r["vis_sm"] = parse_number(v)
+        elif g.startswith("R") and "/" in g:
+            r["rvr"].append(g)
+        elif is_weather(g):
+            r["wx"].append(g)
+        elif g in CLEAR:
+            r["sky"].append([g, None, ""])
+        elif g[0:3] in COVER and is_digits(g[3:6], 3) and g[6:] in ["", "CB", "TCU"]:
+            r["sky"].append([g[0:3], int(g[3:6]) * 100, g[6:]])     # [cover, base ft, CB/TCU]
+        elif g[0:2] == "VV" and is_digits(g[2:5], 3):
+            r["sky"].append(["VV", int(g[2:5]) * 100, ""])
+        elif g in TRENDS:
+            r["trend"] = " ".join(groups[i:])   # trend forecast: keep it whole
+            break
+        elif g.count("/") == 1 and len(g) <= 7 and g[0] != "R":
+            parts = g.split("/")
+            if parts[0] != "":
+                r["temp_c"] = parse_temp(parts[0])
+            if parts[1] != "":
+                r["dew_c"] = parse_temp(parts[1])
+        elif g.startswith("A") and is_digits(g[1:], 4):
+            r["alt_inhg"] = int(g[1:]) / 100
+        elif g.startswith("Q") and is_digits(g[1:], 4):
+            r["alt_inhg"] = int(g[1:]) * 0.02953   # hPa -> inHg
+        else:
+            r["unparsed"].append(g)
+        i += 1
+    return r
+
+# FAA flight category from ceiling (lowest BKN/OVC/VV layer) and visibility.
+def flight_category(r: dict) -> str:
+    ceiling = 100000
+    for layer in r["sky"]:
+        if layer[0] in ["BKN", "OVC", "VV"] and layer[1] != None and layer[1] < ceiling:
+            ceiling = layer[1]
+    vis = 99.0
+    if r["vis_sm"] != None:
+        vis = r["vis_sm"]
+    if ceiling < 500 or vis < 1:
+        return "LIFR"
+    if ceiling < 1000 or vis < 3:
+        return "IFR"
+    if ceiling <= 3000 or vis <= 5:
+        return "MVFR"
+    return "VFR"
+
+# Best available temperature: the precise remark value, else the main group.
+def best_temp(r: dict) -> float:
+    if r["temp_precise"] != None:
+        return r["temp_precise"]
+    if r["temp_c"] != None:
+        return float(r["temp_c"])
+    return None
+
+# ---------------------------------------------------------------- output
+
+def format_report(r: dict) -> str:
+    wind = "-"
+    if r["wind_kt"] == 0:
+        wind = "calm"
+    elif r["wind_kt"] != None:
+        wind = f"{r['wind_dir']}@{r['wind_kt']}"
+        if r["gust_kt"] != None:
+            wind += f"G{r['gust_kt']}"
+    vis = "-"
+    if r["vis_sm"] != None:
+        vis = f"{r['vis_sm']:g}sm"
+        if r["vis_below"]:
+            vis = "<" + vis
+    sky = " ".join([sky_text(layer) for layer in r["sky"]])
+    temps = "-"
+    if r["temp_precise"] != None:
+        temps = f"{r['temp_precise']:.1f}/{r['dew_precise']:.1f}"
+    elif r["temp_c"] != None:
+        temps = f"{r['temp_c']}/"
+        if r["dew_c"] != None:
+            temps += f"{r['dew_c']}"
+        else:
+            temps += "-"
+    alt = "-"
+    if r["alt_inhg"] != None:
+        alt = f"{r['alt_inhg']:.2f}"
+    wx = " ".join(r["wx"])
+    if wx == "":
+        wx = "-"
+    flags = ""
+    if r["auto"]:
+        flags += "A"
+    if r["maintenance"]:
+        flags += "$"
+    return (f"{r['station']:<5} {r['hour']:02d}{r['minute']:02d}Z {flags:<2} {wind:<9} {vis:>7} "
+            f"{wx:<8} {sky:<20} {temps:<11} {alt:<5} {flight_category(r)}")
+
+def sky_text(layer: list) -> str:
+    if layer[1] == None:
+        return layer[0]
+    return f"{layer[0]}{layer[1] // 100:03d}{layer[2]}"
+
+def main(path: str):
+    parts = split_bulletin(read_file(path).decode())
+    header = parts[0]
+    reports = parts[1]
+
+    # Every per-report step is independent and pure, so each one is a parallel
+    # map. Only cheap work is left for main: printing ready-made lines and
+    # folding small values. That's the serial fraction that limits scaling.
+    decoded = [decode_metar(rep) for rep in reports]
+    lines = [format_report(r) for r in decoded]
+    cats = [flight_category(r) for r in decoded]
+    temps = [best_temp(r) for r in decoded]
+
+    print(f"Bulletin {header}: {len(decoded)} reports")
+    print(f"{'STN':<5} {'TIME':<5} {'FL':<2} {'WIND':<9} {'VIS':>7} {'WX':<8} {'SKY':<20} {'T/TD C':<11} {'ALT':<5} CAT")
+    for line in lines:
+        print(line)
+
+    counts = {"VFR": 0, "MVFR": 0, "IFR": 0, "LIFR": 0}
+    warmest = None
+    coldest = None
+    for i in range(len(decoded)):
+        counts[cats[i]] += 1
+        t = temps[i]
+        if t != None:
+            if warmest == None or t > temps[warmest]:
+                warmest = i
+            if coldest == None or t < temps[coldest]:
+                coldest = i
+    print("")
+    print("Flight categories: " + ", ".join([f"{c} {counts[c]}" for c in counts]))
+    if warmest != None:
+        print(f"Warmest: {decoded[warmest]['station']} {temps[warmest]:.1f}C   "
+              f"Coldest: {decoded[coldest]['station']} {temps[coldest]:.1f}C")
+    for r in decoded:
+        if r["trend"] != "":
+            print(f"{r['station']}: trend {r['trend']}")
+        if r["slp_hpa"] != None:
+            print(f"{r['station']}: sea-level pressure {r['slp_hpa']:.1f} hPa")
+        if len(r["remarks"]) > 0:
+            print(f"{r['station']}: other remarks: {' '.join(r['remarks'])}")
+        if len(r["unparsed"]) > 0:
+            print(f"{r['station']}: UNPARSED {' '.join(r['unparsed'])}")

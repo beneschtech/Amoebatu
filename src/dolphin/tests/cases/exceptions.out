@@ -1,7 +1,7 @@
 caught ValueError negative: -3 11
 index
 zero: integer division or modulo by zero
-error: NameError
+error: KeyError
 error: ValueError
 inner saw it
 outer saw DecodeError bad section 9

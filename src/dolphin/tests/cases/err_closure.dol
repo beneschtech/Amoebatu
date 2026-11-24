@@ -1,0 +1,5 @@
+def outer(n):
+    def inner():
+        return n
+    return inner()
+print(outer(1))

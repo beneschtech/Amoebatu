@@ -95,7 +95,7 @@ private:
     ExprP parseExpr(int minPrec = 0);
     ExprP parsePrefix();             ///< Unary operators, then an atom with postfix operations.
     ExprP parsePostfix(ExprP e);     ///< Calls, subscripts/slices and attribute access, left to right.
-    ExprP parseAtom();               ///< Literals, names, parenthesized expressions, list displays.
+    ExprP parseAtom();               ///< Literals, names, parenthesized expressions, list and dict displays.
     ExprP parseFString(const Token& t);  ///< Split an f-string token into text and expression parts.
     /// @}
 

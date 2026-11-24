@@ -23,7 +23,7 @@ for bad in [0, 1, 2, 3]:
         elif bad == 1:
             x = 1 // 0
         elif bad == 2:
-            x = undefined_name
+            x = {"a": 1}["missing"]
         else:
             x = int("abc")
     except IndexError:
