@@ -1,0 +1,6 @@
+round 1: reported: slow failure
+  before = 59997
+  slow = unset   fast = unset   after = unset
+round 2: reported: slow failure
+  before = 59997
+  slow = unset   fast = unset   after = unset

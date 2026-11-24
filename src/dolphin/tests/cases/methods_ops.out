@@ -1,0 +1,8 @@
+Hi
+<method strip>
+1 two 0
+KeyError 'nope'
+AttributeError 'list' has no attribute 'upper'
+AttributeError 'str' has no attribute 'frobnicate'
+6 1024 2 True True True True
+9 -6 -9 11 4

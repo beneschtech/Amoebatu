@@ -1,0 +1,1 @@
+err_closure.dol:3: NameError: 'n' is a local of enclosing function 'outer'; closures are not supported yet (pass it as an argument)

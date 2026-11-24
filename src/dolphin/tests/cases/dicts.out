@@ -1,0 +1,13 @@
+{'KCOS': 6187, 'KDEN': 5434, 1: 'uno', 'KPUB': 4726} 4
+6187 None -1 True True False
+['KCOS', 'KDEN', 1, 'KPUB'] [6187, 5434, 'uno', 4726]
+uno {'KCOS': 6187, 'KDEN': 5434, 'KPUB': 4726} dflt
+KCOS 6187
+KDEN 5434
+KPUB 4726
+['KCOS', 'KDEN', 'KPUB'] [1.5, 2, 3] ['a', 'b', 'c']
+{'the': 3, 'cat': 1, 'and': 2, 'hat': 1, 'bat': 1}
+True True False
+x False True
+KeyError 'missing'
+TypeError unhashable type: 'list'

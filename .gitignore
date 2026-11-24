@@ -1,4 +1,5 @@
 /cmake-build-debug/
+/cmake-build-release/
 
 # Local credentials for Claude sessions: never commit
 claude_reosurces/

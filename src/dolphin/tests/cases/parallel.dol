@@ -1,0 +1,118 @@
+# Parallel execution must be indistinguishable from sequential execution,
+# except for one deliberate difference (LANGUAGE.md decision 17): when several
+# calls fail, the first failure to *return* is reported, which can vary between
+# parallel runs. Cases with several failures check that the reported error is
+# one of them, and that assignments were still restored.
+# Valid Python: the expected output comes from CPython (tests/py_oracle.py),
+# and run_tests.sh runs this at --threads 1 and at several thread counts.
+
+def slow_square(n):
+    total = 0
+    for i in range(3000):
+        total += 1
+    return n * n
+
+def fails_on(n, bad):
+    x = slow_square(n)
+    if n == bad:
+        raise ValueError(f"bad {n}")
+    return x
+
+def sum_squares(n):          # a task that itself runs a parallel map
+    parts = [slow_square(i) for i in range(n)]
+    return sum(parts)
+
+def count(lst):              # reads its argument, never writes it
+    total = 0
+    for v in lst:
+        total += slow_square(1)
+    return total
+
+def log(msg):                # has an effect and its own try
+    try:
+        print(msg)
+    except ValueError:
+        print("WRONG: log's handler caught its caller's failure")
+
+def outer_case():
+    v = fails_on(9, 9)       # fails before the try below starts
+    try:
+        print("must not print (2)")
+    except ValueError:
+        print("WRONG: inner try caught an earlier failure")
+
+def main():
+    # 1. Independent calls overlap; results come back in order.
+    a = slow_square(3)
+    b = slow_square(4)
+    c = slow_square(5)
+    print(a, b, c)
+
+    # 2. Parallel map, and a parallel map inside each task of another.
+    print([slow_square(i) for i in range(20)])
+    print([sum_squares(k) for k in range(8)])
+
+    # 3. Two calls fail: either may be reported (whichever returns first), and
+    #    neither assignment happens.
+    x = "old-x"
+    y = "old-y"
+    try:
+        x = fails_on(1, 1)
+        y = fails_on(2, 2)
+        z = 5
+        print("must not print (1)")
+    except ValueError as e:
+        print("caught one of them:", str(e) in ["bad 1", "bad 2"], x, y)
+
+    # 4. One failing element in a parallel map: exact, like sequential.
+    #    Every element failing: any of them may be reported.
+    try:
+        vals = [fails_on(i, 7) for i in range(12)]
+        print("must not print (3)", vals)
+    except ValueError as e:
+        print("comprehension:", e)
+    try:
+        vals = [fails_on(i, i) for i in range(5, 12)]
+    except ValueError as e:
+        print("one of many:", str(e) in [f"bad {i}" for i in range(5, 12)])
+
+    # 5. An effect waits for earlier calls; a failure surfaces instead of it.
+    try:
+        w = fails_on(3, 3)
+        print("must not print (4)")
+    except ValueError as e:
+        print("before effect:", e)
+
+    # 6. The failure belongs to main, but the effect happens inside log():
+    #    it must reach main's handler, not log's.
+    try:
+        q = fails_on(4, 4)
+        log("must not print (5)")
+    except ValueError as e:
+        print("deferred to caller:", e)
+
+    # 7. Mutating an object while a call that reads it is in flight waits for the call.
+    data = [1, 2, 3]
+    n = count(data)
+    data.append(4)
+    print(n, data)
+
+    # 8. A failure from before a `try` is not caught by that `try`.
+    try:
+        outer_case()
+    except ValueError as e:
+        print("outer handler:", e)
+
+    # 9. A result that's never read still reports its failure.
+    try:
+        fails_on(6, 6)
+        k = 1
+    except ValueError as e:
+        print("unread result:", e)
+
+    # 10. Many independent futures, joined at the end.
+    results = []
+    for i in range(10):
+        r = slow_square(i)
+        results.append(r)
+    print(sum(results))

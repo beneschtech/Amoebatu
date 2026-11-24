@@ -1,0 +1,12 @@
+9 16 25
+[0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169, 196, 225, 256, 289, 324, 361]
+[0, 0, 1, 5, 14, 30, 55, 91]
+caught one of them: True old-x old-y
+comprehension: bad 7
+one of many: True
+before effect: bad 3
+deferred to caller: bad 4
+3 [1, 2, 3, 4]
+outer handler: bad 9
+unread result: bad 6
+285

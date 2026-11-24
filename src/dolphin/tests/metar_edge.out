@@ -1,0 +1,12 @@
+Bulletin SAUS70 KXXX 241200: 4 reports
+STN   TIME  FL WIND          VIS WX       SKY                  T/TD C      ALT   CAT
+KXA1  1153Z    180@15G28   1.5sm +TSRA BR SCT008 BKN015CB OVC030 22.2/21.1   29.92 IFR
+KXA2  1155Z A$ VRB@3     <0.25sm FZFG     VV002                -5.0/-6.1   30.21 LIFR
+KXA3  1200Z    calm          3sm -SN BR   OVC012               -2/-        30.01 MVFR
+KXA4  1207Z    270@12        6sm HZ       FEW250               31/12       29.91 VFR
+
+Flight categories: VFR 1, MVFR 1, IFR 1, LIFR 1
+Warmest: KXA4 31.0C   Coldest: KXA2 -5.0C
+KXA1: sea-level pressure 1013.2 hPa
+KXA3: sea-level pressure 998.5 hPa
+KXA4: trend NOSIG

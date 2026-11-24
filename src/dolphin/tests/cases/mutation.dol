@@ -1,0 +1,48 @@
+TABLE = [1, 2, 3]
+
+def builds_own(n):          # fresh list, mutated locally: parallel
+    out = []
+    for i in range(n):
+        out.append(i * i)
+    return out
+
+def appends_param(lst, x):  # mutates its argument: inline
+    lst.append(x)
+
+def via_alias(lst):         # alias of a parameter: inline
+    other = lst
+    other.append(0)
+
+def via_element(rows):      # mutates an element of a parameter: inline
+    rows[0].append(1)
+
+def via_loop_var(rows):     # loop variable aliases an element: inline
+    for r in rows:
+        r.append(1)
+
+def via_callee(lst):        # passes its parameter to a mutator: inline
+    appends_param(lst, 5)
+
+def safe_callee(lst):       # passes only a fresh copy to the mutator: parallel
+    mine = lst[0:]
+    appends_param(mine, 5)
+    return mine
+
+def touches_global():       # mutates a module-level list: inline
+    TABLE.append(4)
+
+def item_assign(d):         # d[k] = v on a parameter: inline
+    d["k"] = 1
+
+def returns_param(lst):     # returns its argument; result is not fresh
+    return lst
+
+def mutates_result(lst):    # mutates what a user function returned: inline
+    x = returns_param(lst)
+    x.append(1)
+
+def reads_only(lst, d):     # reads, never writes: parallel
+    total = 0
+    for v in lst:
+        total += v
+    return total + len(d)
