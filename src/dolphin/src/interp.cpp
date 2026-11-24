@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <iostream>
 #include <mutex>
@@ -292,9 +293,13 @@ FutureP Interp::tryDispatch(const Def& d, Args& args, Kwargs& kw, int line) {
     if (pred < cost_.callThresholdNs() && !(probe = cost_.shouldProbe(pred))) {
         if (trace_) {
             char buf[200];
-            std::snprintf(buf, sizeof buf, ": inline (predicted %.1f us = %.0f ops / %.1f Mops/s < %.0f x (submit %.1f + wake %.1f us))",
-                          pred / 1e3, cost_.avgOps(&d), cost_.rate() * 1e3, CostModel::kCallFactor, cost_.submitNs() / 1e3,
-                          cost_.wakeNs() / 1e3);
+            if (cost_.rate() > 0)
+                std::snprintf(buf, sizeof buf, ": inline (predicted %.1f us = %.0f ops / %.1f Mops/s < %.0f x (submit %.1f + wake %.1f us))",
+                              pred / 1e3, cost_.avgOps(&d), cost_.rate() * 1e3, CostModel::kCallFactor, cost_.submitNs() / 1e3,
+                              cost_.wakeNs() / 1e3);
+            else   // too few clean samples for a rate yet: the prediction is the function's own measured time
+                std::snprintf(buf, sizeof buf, ": inline (measured %.1f us, rate not known yet, < %.0f x (submit %.1f + wake %.1f us))",
+                              pred / 1e3, CostModel::kCallFactor, cost_.submitNs() / 1e3, cost_.wakeNs() / 1e3);
             trace(where + buf);
         }
         return nullptr;
@@ -394,6 +399,20 @@ void Interp::addPending(Frame& f, FutureP fut, const std::string& name) {
     ++tlCtx_->pendingCount;
 }
 
+void Interp::addPendingReg(Frame& f, FutureP fut, Value* reg, uint8_t* regBound) {
+    Pending p;
+    p.seq = fut->seq;
+    p.fut = fut;
+    p.reg = reg;
+    p.regBound = regBound;
+    p.hadPrev = *regBound != 0;
+    if (p.hadPrev) p.prev = *reg;
+    *reg = Value(std::move(fut));
+    *regBound = 1;
+    f.pending.push_back(std::move(p));
+    ++tlCtx_->pendingCount;
+}
+
 void Interp::waitFuture(Future& fut) {
     if (!fut.ready()) tl_waited = true;   // this call's time now includes waiting
     if (pool_) pool_->wait(fut);
@@ -460,12 +479,26 @@ DolphinError Interp::abandonFrame(Frame& f, uint64_t failSeq, DolphinError err) 
     // twice ends up with the value from before the first discarded call.
     for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
         const Pending& p = *it;
-        if (p.name.empty() || p.seq < failSeq) continue;
+        if (p.seq < failSeq) continue;
+        if (p.reg) {   // p-code: the target is a register
+            *p.reg = p.hadPrev ? p.prev : Value();
+            *p.regBound = p.hadPrev ? 1 : 0;
+            continue;
+        }
+        if (p.name.empty()) continue;
         if (p.hadPrev) (*f.vars)[p.name] = p.prev;
         else f.vars->erase(p.name);
     }
     for (auto& p : pending) {   // earlier calls that failed too: their assignment didn't happen either
-        if (p.name.empty() || p.seq >= failSeq || !p.fut->failed()) continue;
+        if (p.seq >= failSeq || !p.fut->failed()) continue;
+        if (p.reg) {
+            if (p.reg->isFuture() && p.reg->as<FutureP>() == p.fut) {
+                *p.reg = p.hadPrev ? p.prev : Value();
+                *p.regBound = p.hadPrev ? 1 : 0;
+            }
+            continue;
+        }
+        if (p.name.empty()) continue;
         auto cur = f.vars->find(p.name);
         if (cur == f.vars->end() || !cur->second.isFuture() || cur->second.as<FutureP>() != p.fut) continue;
         if (p.hadPrev) cur->second = p.prev;
@@ -618,29 +651,36 @@ bool Interp::parallelComprehension(const ListComp& c, Frame& f, Value& out) {
         if (!exprIsReorderable(*v)) return false;
     if (c.cond && !exprIsReorderable(*c.cond)) return false;
 
+    std::vector<MapItem> items;
+    for (auto& v : iterate(eval(*c.iter, f), c.line)) {
+        (*f.vars)[c.var] = v;
+        if (c.cond && !truthy(eval(*c.cond, f))) continue;
+        MapItem it;
+        evalArgs(call, f, it.args, it.kw);
+        items.push_back(std::move(it));
+    }
+    out = parallelMap(*d, std::move(items), c.line);
+    return true;
+}
+
+Value Interp::parallelMap(const Def& def, std::vector<MapItem> items, int line) {
+    const Def* d = &def;
     // Everything a batch touches is owned here, shared with the batches: an
     // abandoned batch (decision 17) may still be running after we return.
-    struct Item { Args args; Kwargs kw; };
     struct Shared {
-        std::vector<Item> items;
+        std::vector<MapItem> items;
         std::vector<Value> results;
         std::atomic<bool> abort{false};   ///< Set by the first failing element; other batches stop early.
     };
     auto sh = std::make_shared<Shared>();
-    for (auto& v : iterate(eval(*c.iter, f), c.line)) {
-        (*f.vars)[c.var] = v;
-        if (c.cond && !truthy(eval(*c.cond, f))) continue;
-        Item it;
-        evalArgs(call, f, it.args, it.kw);
-        sh->items.push_back(std::move(it));
-    }
+    sh->items = std::move(items);
     size_t n = sh->items.size();
     sh->results.resize(n);
 
     // One batch: run elements in order; stop at the first failure (later
     // elements of the batch wouldn't have run sequentially) or when another
     // batch has already failed. Result or error goes into the batch's future.
-    auto runBatch = [this, d, sh, line = c.line](size_t lo, size_t hi, const FutureP& fut) {
+    auto runBatch = [this, d, sh, line](size_t lo, size_t hi, const FutureP& fut) {
         if (fut->cancelled()) {
             fut->fail(DolphinError{"Cancelled", "", line});
             return;
@@ -694,7 +734,7 @@ bool Interp::parallelComprehension(const ListComp& c, Frame& f, Value& out) {
         absorbOps(*fut);
     }
 
-    if (trace_) trace(d->name + "() line " + std::to_string(c.line) + ": parallel map, " + std::to_string(n) + " items in " + std::to_string(futs.size()) + " batches");
+    if (trace_) trace(d->name + "() line " + std::to_string(line) + ": parallel map, " + std::to_string(n) + " items in " + std::to_string(futs.size()) + " batches");
     if (FutureP first = waitAllOrFirstFailure(futs)) {
         // The first failure to return wins. Stop the rest; any still running are
         // tracked so the next mutation or effect waits for them.
@@ -706,8 +746,7 @@ bool Interp::parallelComprehension(const ListComp& c, Frame& f, Value& out) {
             }
         throw first->error();
     }
-    out = Value::list(std::move(sh->results));
-    return true;
+    return Value::list(std::move(sh->results));
 }
 
 // --------------------------------------------------------------- statements
@@ -899,24 +938,9 @@ void Interp::assign(const Expr& target, const Value& v, Frame& f) {
         auto& ix = static_cast<const Index&>(target);
         Value obj = eval(*ix.obj, f);
         if (ix.index->k == Expr::K::Slice) raise("TypeError", "slice assignment is not supported", target.line);
-        if (obj.isDict()) {
-            Value k = eval(*ix.index, f);
-            std::string ck;
-            if (!dictKey(k, ck)) raise("TypeError", "unhashable type: '" + typeName(k) + "'", target.line);
-            barrier();   // mutation: nothing in flight may be reading it
-            obj.d().set(ck, k, v);
-            return;
-        }
-        if (!obj.isList()) raise("TypeError", "'" + typeName(obj) + "' does not support item assignment", target.line);
-        Value iv = eval(*ix.index, f);
-        if (!iv.isInt()) raise("TypeError", "list indices must be int", target.line);
-        auto& items = obj.l().items;
-        int64_t i = iv.as<int64_t>();
-        if (i < 0) i += static_cast<int64_t>(items.size());
-        if (i < 0 || i >= static_cast<int64_t>(items.size()))
-            raise("IndexError", "list assignment index out of range", target.line);
-        barrier();   // mutation: nothing in flight may be reading it
-        items[static_cast<size_t>(i)] = v;
+        if (!obj.isDict() && !obj.isList())   // checked before the index is evaluated
+            raise("TypeError", "'" + typeName(obj) + "' does not support item assignment", target.line);
+        setIndex(obj, eval(*ix.index, f), v, target.line);
         return;
     }
     case Expr::K::Attr:
@@ -924,6 +948,24 @@ void Interp::assign(const Expr& target, const Value& v, Frame& f) {
     default:
         raise("SyntaxError", "cannot assign to expression", target.line);
     }
+}
+
+void Interp::setIndex(const Value& obj, const Value& k, const Value& v, int line) {
+    if (obj.isDict()) {
+        std::string ck;
+        if (!dictKey(k, ck)) raise("TypeError", "unhashable type: '" + typeName(k) + "'", line);
+        barrier();   // mutation: nothing in flight may be reading it
+        obj.d().set(ck, k, v);
+        return;
+    }
+    if (!obj.isList()) raise("TypeError", "'" + typeName(obj) + "' does not support item assignment", line);
+    if (!k.isInt()) raise("TypeError", "list indices must be int", line);
+    auto& items = obj.l().items;
+    int64_t i = k.as<int64_t>();
+    if (i < 0) i += static_cast<int64_t>(items.size());
+    if (i < 0 || i >= static_cast<int64_t>(items.size())) raise("IndexError", "list assignment index out of range", line);
+    barrier();   // mutation: nothing in flight may be reading it
+    items[static_cast<size_t>(i)] = v;
 }
 
 // -------------------------------------------------------------- expressions
@@ -990,19 +1032,7 @@ Value Interp::eval(const Expr& e, Frame& f) {
 
     case Expr::K::Unary: {
         auto& u = static_cast<const Unary&>(e);
-        Value v = eval(*u.operand, f);
-        if (u.code == Op::Not) return Value(!truthy(v));
-        if (v.is<bool>()) v = Value(static_cast<int64_t>(v.as<bool>()));
-        if (u.code == Op::Pos && v.isNum()) return v;
-        if (u.code == Op::Neg) {
-            if (v.isFloat()) return Value(-v.as<double>());
-            if (v.isInt()) {
-                if (v.as<int64_t>() == INT64_MIN) raise("OverflowError", "integer overflow", e.line);
-                return Value(-v.as<int64_t>());
-            }
-        }
-        if (u.code == Op::Invert && v.isInt()) return Value(~v.as<int64_t>());
-        raise("TypeError", "bad operand type for unary " + u.op + ": '" + typeName(v) + "'", e.line);
+        return unaryValue(u.code, eval(*u.operand, f), e.line);
     }
 
     case Expr::K::Binary: {
@@ -1087,7 +1117,7 @@ Value Interp::eval(const Expr& e, Frame& f) {
         auto& ix = static_cast<const Index&>(e);
         Value obj = eval(*ix.obj, f);
         if (ix.hasConstKey && obj.isDict()) {   // r["station"]: key precomputed by the parser
-            long pos = obj.d().find(ix.constKey);
+            long pos = obj.d().find(ix.constKey, ix.constHash);
             if (pos >= 0) return obj.d().entries[static_cast<size_t>(pos)].second;
         }
         return subscript(obj, *ix.index, f, e.line);   // also raises the KeyError
@@ -1316,27 +1346,53 @@ static void sliceBounds(int64_t len, const Value* lo, const Value* hi, int64_t& 
     if (b < a) b = a;
 }
 
+Value Interp::unaryValue(Op op, const Value& operand, int line) const {
+    Value v = operand;
+    if (op == Op::Not) return Value(!truthy(v));
+    if (v.is<bool>()) v = Value(static_cast<int64_t>(v.as<bool>()));
+    if (op == Op::Pos && v.isNum()) return v;
+    if (op == Op::Neg) {
+        if (v.isFloat()) return Value(-v.as<double>());
+        if (v.isInt()) {
+            if (v.as<int64_t>() == INT64_MIN) raise("OverflowError", "integer overflow", line);
+            return Value(-v.as<int64_t>());
+        }
+    }
+    if (op == Op::Invert && v.isInt()) return Value(~v.as<int64_t>());
+    raise("TypeError", std::string("bad operand type for unary ") + opSpelling(op) + ": '" + typeName(v) + "'", line);
+}
+
+// The tree-walker checks the object before evaluating the index or bounds;
+// the value-based helpers below are what both engines share after that.
 Value Interp::subscript(const Value& obj, const Expr& idx, Frame& f, int line) {
     if (obj.isDict()) {
         if (idx.k == Expr::K::Slice) raise("TypeError", "dict cannot be sliced", line);
-        Value k = eval(idx, f);
-        std::string ck;
-        if (!dictKey(k, ck)) raise("TypeError", "unhashable type: '" + typeName(k) + "'", line);
-        long pos = obj.d().find(ck);
-        if (pos < 0) raise("KeyError", toRepr(k), line);
-        return obj.d().entries[static_cast<size_t>(pos)].second;
+        return indexValue(obj, eval(idx, f), line);
     }
-    int64_t len;
-    if (obj.isStr()) len = static_cast<int64_t>(utf8Length(obj.s()));
-    else if (obj.isBytes()) len = static_cast<int64_t>(obj.b().b.size());
-    else if (obj.isList()) len = static_cast<int64_t>(obj.l().items.size());
-    else raise("TypeError", "'" + typeName(obj) + "' is not subscriptable", line);
-
+    if (!obj.isStr() && !obj.isBytes() && !obj.isList())
+        raise("TypeError", "'" + typeName(obj) + "' is not subscriptable", line);
     if (idx.k == Expr::K::Slice) {
         auto& s = static_cast<const Slice&>(idx);
         Value lo, hi;
         if (s.lo) lo = eval(*s.lo, f);
         if (s.hi) hi = eval(*s.hi, f);
+        return sliceValue(obj, lo, hi, line);
+    }
+    return indexValue(obj, eval(idx, f), line);
+}
+
+/// @brief Length of a str (code points), bytes or list; TypeError for anything else.
+static int64_t seqLength(const Interp& in, const Value& obj, int line) {
+    if (obj.isStr()) return static_cast<int64_t>(utf8Length(obj.s()));
+    if (obj.isBytes()) return static_cast<int64_t>(obj.b().b.size());
+    if (obj.isList()) return static_cast<int64_t>(obj.l().items.size());
+    in.raise("TypeError", "'" + typeName(obj) + "' is not subscriptable", line);
+}
+
+Value Interp::sliceValue(const Value& obj, const Value& lo, const Value& hi, int line) const {
+    if (obj.isDict()) raise("TypeError", "dict cannot be sliced", line);
+    int64_t len = seqLength(*this, obj, line);
+    {
         for (auto* v : {&lo, &hi})
             if (!v->isNone() && !v->isInt()) raise("TypeError", "slice indices must be int", line);
         int64_t a, b;
@@ -1350,8 +1406,17 @@ Value Interp::subscript(const Value& obj, const Expr& idx, Frame& f, int line) {
         auto& items = obj.l().items;
         return Value::list(std::vector<Value>(items.begin() + a, items.begin() + b));
     }
+}
 
-    Value iv = eval(idx, f);
+Value Interp::indexValue(const Value& obj, const Value& iv, int line) const {
+    if (obj.isDict()) {
+        std::string ck;
+        if (!dictKey(iv, ck)) raise("TypeError", "unhashable type: '" + typeName(iv) + "'", line);
+        long pos = obj.d().find(ck);
+        if (pos < 0) raise("KeyError", toRepr(iv), line);
+        return obj.d().entries[static_cast<size_t>(pos)].second;
+    }
+    int64_t len = seqLength(*this, obj, line);
     if (!iv.isInt()) raise("TypeError", typeName(obj) + " indices must be int, not " + typeName(iv), line);
     int64_t i = iv.as<int64_t>();
     if (i < 0) i += len;
@@ -1413,6 +1478,29 @@ Value Interp::callValue(const Value& fn, Args& args, Kwargs& kw, int line) {
     raise("TypeError", "'" + typeName(fn) + "' object is not callable", line);
 }
 
+/// @brief A call's registers and their bound flags: inline for small functions
+///        (most of them), heap for big ones. Saves two allocations per call.
+struct RegFile {
+    static constexpr size_t kInline = 24;
+    Value inlineR[kInline];
+    uint8_t inlineB[kInline] = {};
+    std::unique_ptr<Value[]> heapR;
+    std::unique_ptr<uint8_t[]> heapB;
+    Value* R;
+    uint8_t* B;
+    explicit RegFile(size_t n) {
+        if (n <= kInline) {
+            R = inlineR;
+            B = inlineB;
+        } else {
+            heapR = std::make_unique<Value[]>(n);
+            heapB = std::make_unique<uint8_t[]>(n);   // value-initialized: all unbound
+            R = heapR.get();
+            B = heapB.get();
+        }
+    }
+};
+
 // Parameter binding: positional args fill parameters left to right; keyword
 // args fill by name (unknown or duplicate names are TypeErrors); remaining
 // parameters take their defaults. Unlike Python, defaults are evaluated at
@@ -1424,23 +1512,83 @@ Value Interp::callFunction(const Def& d, Args& args, Kwargs& kw, int line) {
     if (args.size() > d.params.size())
         raise("TypeError", d.name + "() takes " + std::to_string(d.params.size()) + " arguments but " +
                                std::to_string(args.size()) + " were given", line);
-    Scope locals;
-    for (size_t i = 0; i < args.size(); ++i) locals[d.params[i].name] = args[i];
-    for (auto& [k, v] : kw) {
-        bool known = false;
-        for (auto& p : d.params)
-            if (p.name == k) known = true;
-        if (!known) raise("TypeError", d.name + "() got an unexpected keyword argument '" + k + "'", line);
-        if (locals.count(k)) raise("TypeError", d.name + "() got multiple values for argument '" + k + "'", line);
-        locals[k] = v;
+    // P-code: parameters go into registers r0..r(n-1) instead of a name table.
+    // Same binding rules and messages as the tree-walker below.
+    const PCode* pc = nullptr;
+    if (usePcode_) {
+        auto it = pcode_.find(&d);
+        if (it != pcode_.end()) pc = it->second.get();
     }
-    Frame g(&globals_);
-    for (auto& p : d.params) {
-        if (locals.count(p.name)) continue;
-        if (!p.dflt) raise("TypeError", d.name + "() missing required argument '" + p.name + "'", line);
-        locals[p.name] = eval(*p.dflt, g);   // evaluated per call; values are immutable anyway
+    Scope locals;
+    RegFile rf(pc ? pc->nregs : 0);
+    Value* regs = rf.R;
+    uint8_t* bound = rf.B;
+    if (pc) {
+        for (size_t i = 0; i < args.size(); ++i) {
+            regs[i] = args[i];
+            bound[i] = 1;
+        }
+        for (auto& [k, v] : kw) {
+            size_t idx = d.params.size();
+            for (size_t i = 0; i < d.params.size(); ++i)
+                if (d.params[i].name == k) idx = i;
+            if (idx == d.params.size()) raise("TypeError", d.name + "() got an unexpected keyword argument '" + k + "'", line);
+            if (bound[idx]) raise("TypeError", d.name + "() got multiple values for argument '" + k + "'", line);
+            regs[idx] = v;
+            bound[idx] = 1;
+        }
+        Frame g(&globals_);
+        for (size_t i = 0; i < d.params.size(); ++i) {
+            if (bound[i]) continue;
+            if (!d.params[i].dflt) raise("TypeError", d.name + "() missing required argument '" + d.params[i].name + "'", line);
+            regs[i] = eval(*d.params[i].dflt, g);
+            bound[i] = 1;
+        }
+    } else {
+        for (size_t i = 0; i < args.size(); ++i) locals[d.params[i].name] = args[i];
+        for (auto& [k, v] : kw) {
+            bool known = false;
+            for (auto& p : d.params)
+                if (p.name == k) known = true;
+            if (!known) raise("TypeError", d.name + "() got an unexpected keyword argument '" + k + "'", line);
+            if (locals.count(k)) raise("TypeError", d.name + "() got multiple values for argument '" + k + "'", line);
+            locals[k] = v;
+        }
+        Frame g(&globals_);
+        for (auto& p : d.params) {
+            if (locals.count(p.name)) continue;
+            if (!p.dflt) raise("TypeError", d.name + "() missing required argument '" + p.name + "'", line);
+            locals[p.name] = eval(*p.dflt, g);   // evaluated per call; values are immutable anyway
+        }
     }
 
+    return pc ? runBody(d, pc, regs, bound, nullptr, line) : runBody(d, nullptr, nullptr, nullptr, &locals, line);
+}
+
+Value Interp::callPcode(const Def& d, const PCode& pc, const Value* R, const uint8_t* argRegs, size_t n, int line) {
+    if (tl_depth >= kMaxDepth) raise("RecursionError", "maximum recursion depth exceeded", line);
+    if (n > d.params.size())
+        raise("TypeError", d.name + "() takes " + std::to_string(d.params.size()) + " arguments but " +
+                               std::to_string(n) + " were given", line);
+    RegFile rf(pc.nregs);
+    for (size_t i = 0; i < n; ++i) {
+        rf.R[i] = R[argRegs[i]];
+        rf.B[i] = 1;
+    }
+    if (n < d.params.size()) {
+        Frame g(&globals_);
+        for (size_t i = n; i < d.params.size(); ++i) {
+            if (!d.params[i].dflt) raise("TypeError", d.name + "() missing required argument '" + d.params[i].name + "'", line);
+            rf.R[i] = eval(*d.params[i].dflt, g);
+            rf.B[i] = 1;
+        }
+    }
+    return runBody(d, &pc, rf.R, rf.B, nullptr, line);
+}
+
+Value Interp::runBody(const Def& d, const PCode* pc, Value* regs, uint8_t* bound, Scope* localsP, int /*line*/) {
+    Scope empty;
+    Scope& locals = localsP ? *localsP : empty;
     Frame f(&locals);
     TaskCtx* ctx = tlCtx_;
     ctx->frames.push_back(&f);
@@ -1469,7 +1617,8 @@ Value Interp::callFunction(const Def& d, Args& args, Kwargs& kw, int line) {
         cost_.recordCall(&d, tl_ops - ops0, static_cast<uint64_t>(ns), !waited);
     };
     try {
-        execBlock(d.body, f, ret);
+        if (pc) ret = execPcode(*pc, f, regs, bound);
+        else execBlock(d.body, f, ret);
         settle(f);
         ret = force(ret, f);   // `return x` where x is a future
         recordCost();
@@ -1492,6 +1641,429 @@ Value Interp::callFunction(const Def& d, Args& args, Kwargs& kw, int line) {
     }
     leave();
     return ret;
+}
+
+// ==================================================================== p-code
+
+void Interp::compileAll(const Block& b) {
+    for (auto& s : b) {
+        switch (s->k) {
+        case Stmt::K::Def: {
+            auto& d = static_cast<const Def&>(*s);
+            CompileHooks hooks;
+            hooks.builtin = [this](const std::string& n) { return builtins_.at(n); };
+            hooks.overlap = [this](const Stmt& st) { return overlapAssigns_.count(&st) != 0; };
+            hooks.reorderable = [this](const Expr& e) { return exprIsReorderable(e); };
+            hooks.optimize = optimize_;
+            auto p = compileFunction(d, hooks);
+            if (p) pcode_[&d] = std::move(p);
+            compileAll(d.body);   // nested defs
+            break;
+        }
+        case Stmt::K::If:
+            for (auto& [c, body] : static_cast<const If&>(*s).branches) compileAll(body);
+            compileAll(static_cast<const If&>(*s).orelse);
+            break;
+        case Stmt::K::While: compileAll(static_cast<const While&>(*s).body); break;
+        case Stmt::K::For: compileAll(static_cast<const For&>(*s).body); break;
+        case Stmt::K::Try:
+            compileAll(static_cast<const Try&>(*s).body);
+            for (auto& h : static_cast<const Try&>(*s).handlers) compileAll(h.body);
+            break;
+        default: break;
+        }
+    }
+}
+
+void Interp::setPcode(bool on) {
+    usePcode_ = on;
+    pcode_.clear();
+    if (on) compileAll(mod_.body);
+}
+
+// The p-code interpreter (P1a: sequential). One switch per instruction; the
+// semantics of each operation are the shared Interp helpers, so both engines
+// compute identical results and raise identical errors.
+//
+// Exceptions: helpers throw DolphinError. The catch below looks up the
+// faulting instruction in the exception table (innermost entries first).
+// Unwinding out of a handler body ends that handling (as the tree-walker's
+// catch(...) does); reaching a try entry jumps to its handler code with the
+// error in `caught`.
+Value Interp::execPcode(const PCode& p, Frame& f, Value* R, uint8_t* B) {
+    struct Iter {
+        std::vector<Value> items;
+        size_t i = 0;
+    };
+    std::vector<Iter> iters(p.niters);
+    const uint32_t* code = p.code.data();
+    size_t pc = 0, cur = 0;
+    DolphinError caught;
+    auto unboundName = [&](unsigned r) { return r < p.regNames.size() ? p.regNames[r] : std::string("?"); };
+    auto buildArgs = [&](const CallSite& cs, Args& args, Kwargs& kw) {
+        size_t npos = cs.args.size() - cs.kwNames.size();
+        args.reserve(npos);
+        for (size_t i = 0; i < npos; ++i) args.push_back(R[cs.args[i]]);
+        for (size_t i = npos; i < cs.args.size(); ++i) kw.emplace_back(cs.kwNames[i - npos], R[cs.args[i]]);
+    };
+    auto lookupClass = [&](const std::string& n, int line) -> Value {
+        auto it = globals_.find(n);
+        if (it != globals_.end()) return it->second;
+        it = builtins_.find(n);
+        if (it != builtins_.end()) return it->second;
+        raise("NameError", "name '" + n + "' is not defined", line);
+    };
+
+    for (;;) {
+        try {
+            for (;;) {
+                cur = pc++;
+                uint32_t w = code[cur];
+                ++tl_ops;   // one operation per instruction (cost model)
+                unsigned a = ins::a(w);
+                switch (ins::op(w)) {
+                case OpCode::MOVE: R[a] = R[ins::b(w)]; B[a] = 1; break;
+                case OpCode::LOADK: R[a] = p.consts[ins::bx(w)]; B[a] = 1; break;
+                case OpCode::LOADNIL: R[a] = Value(); B[a] = 1; break;
+                case OpCode::LOADTRUE: R[a] = Value(true); B[a] = 1; break;
+                case OpCode::LOADFALSE: R[a] = Value(false); B[a] = 1; break;
+                case OpCode::CHKB:
+                    if (!B[a])
+                        raise("UnboundLocalError", "local variable '" + unboundName(a) + "' referenced before assignment",
+                              p.lines[cur]);
+                    break;
+                case OpCode::GETG: {
+                    auto& slot = p.globalCache[ins::bx(w)];
+                    const Value* gv = slot.load(std::memory_order_acquire);
+                    if (!gv) {   // first use: find it once (stable node, never erased)
+                        const std::string& n = p.names[ins::bx(w)];
+                        auto it = globals_.find(n);
+                        if (it == globals_.end()) raise("NameError", "name '" + n + "' is not defined yet", p.lines[cur]);
+                        gv = &it->second;
+                        slot.store(gv, std::memory_order_release);
+                    }
+                    R[a] = *gv;
+                    B[a] = 1;
+                    break;
+                }
+                // Integer fast paths: int op int without going through binary()/compare().
+                // Overflow falls back to binary(), which raises the OverflowError.
+                case OpCode::ADD: case OpCode::SUB: case OpCode::MUL: {
+                    const Value& x = R[ins::b(w)];
+                    const Value& y = R[ins::c(w)];
+                    if (x.isInt() && y.isInt()) {
+                        int64_t r, xi = x.as<int64_t>(), yi = y.as<int64_t>();
+                        OpCode oc = ins::op(w);
+                        bool ovf = oc == OpCode::ADD ? __builtin_add_overflow(xi, yi, &r)
+                                 : oc == OpCode::SUB ? __builtin_sub_overflow(xi, yi, &r)
+                                                     : __builtin_mul_overflow(xi, yi, &r);
+                        if (!ovf) {
+                            R[a] = Value(r);
+                            B[a] = 1;
+                            break;
+                        }
+                    }
+                    Op op = static_cast<Op>(static_cast<unsigned>(Op::Add) + static_cast<unsigned>(ins::op(w)) -
+                                            static_cast<unsigned>(OpCode::ADD));
+                    Value r = binary(op, x, y, p.lines[cur]);
+                    R[a] = std::move(r);
+                    B[a] = 1;
+                    break;
+                }
+                case OpCode::JEQ: case OpCode::JNE: case OpCode::JLT: case OpCode::JLE: case OpCode::JGT:
+                case OpCode::JGE: case OpCode::JIN: case OpCode::JNOTIN: {
+                    const Value& x = R[a];
+                    const Value& y = R[ins::b(w)];
+                    OpCode oc = ins::op(w);
+                    bool r;
+                    if (x.isInt() && y.isInt() && oc <= OpCode::JGE) {
+                        int64_t xi = x.as<int64_t>(), yi = y.as<int64_t>();
+                        r = oc == OpCode::JEQ ? xi == yi : oc == OpCode::JNE ? xi != yi : oc == OpCode::JLT ? xi < yi
+                          : oc == OpCode::JLE ? xi <= yi : oc == OpCode::JGT ? xi > yi : xi >= yi;
+                    } else {
+                        Op op = static_cast<Op>(static_cast<unsigned>(Op::Eq) + static_cast<unsigned>(oc) -
+                                                static_cast<unsigned>(OpCode::JEQ));
+                        r = compare(op, x, y, p.lines[cur]);
+                    }
+                    if (r == (ins::c(w) != 0)) pc += 1 + ins::sbx(code[pc]);   // take the jump in the next word
+                    else ++pc;                                                 // skip it
+                    break;
+                }
+                case OpCode::DIV: case OpCode::FDIV:
+                case OpCode::MOD: case OpCode::POW: case OpCode::BAND: case OpCode::BOR: case OpCode::BXOR:
+                case OpCode::SHL: case OpCode::SHR: {
+                    Op op = static_cast<Op>(static_cast<unsigned>(Op::Add) + static_cast<unsigned>(ins::op(w)) -
+                                            static_cast<unsigned>(OpCode::ADD));
+                    Value r = binary(op, R[ins::b(w)], R[ins::c(w)], p.lines[cur]);
+                    R[a] = std::move(r);
+                    B[a] = 1;
+                    break;
+                }
+                case OpCode::EQ: case OpCode::NE: case OpCode::LT: case OpCode::LE: case OpCode::GT:
+                case OpCode::GE: case OpCode::IN: case OpCode::NOTIN: {
+                    const Value& x = R[ins::b(w)];
+                    const Value& y = R[ins::c(w)];
+                    OpCode oc = ins::op(w);
+                    if (x.isInt() && y.isInt() && oc <= OpCode::GE) {
+                        int64_t xi = x.as<int64_t>(), yi = y.as<int64_t>();
+                        bool r = oc == OpCode::EQ ? xi == yi : oc == OpCode::NE ? xi != yi : oc == OpCode::LT ? xi < yi
+                               : oc == OpCode::LE ? xi <= yi : oc == OpCode::GT ? xi > yi : xi >= yi;
+                        R[a] = Value(r);
+                        B[a] = 1;
+                        break;
+                    }
+                    Op op = static_cast<Op>(static_cast<unsigned>(Op::Eq) + static_cast<unsigned>(ins::op(w)) -
+                                            static_cast<unsigned>(OpCode::EQ));
+                    bool r = compare(op, R[ins::b(w)], R[ins::c(w)], p.lines[cur]);
+                    R[a] = Value(r);
+                    B[a] = 1;
+                    break;
+                }
+                case OpCode::NOT: case OpCode::NEG: case OpCode::POS: case OpCode::INV: {
+                    OpCode oc = ins::op(w);
+                    Op op = oc == OpCode::NOT ? Op::Not : oc == OpCode::NEG ? Op::Neg : oc == OpCode::POS ? Op::Pos : Op::Invert;
+                    Value r = unaryValue(op, R[ins::b(w)], p.lines[cur]);
+                    R[a] = std::move(r);
+                    B[a] = 1;
+                    break;
+                }
+                case OpCode::JMP: pc += ins::sbx(w); break;
+                case OpCode::JMPIF: if (truthy(R[a])) pc += ins::sbx(w); break;
+                case OpCode::JMPIFNOT: if (!truthy(R[a])) pc += ins::sbx(w); break;
+                case OpCode::ITER: {
+                    Iter& it = iters[a];
+                    it.items = iterate(R[ins::b(w)], p.lines[cur]);
+                    it.i = 0;
+                    break;
+                }
+                case OpCode::FORNEXT: {
+                    Iter& it = iters[ins::b(w)];
+                    if (it.i < it.items.size()) {
+                        R[a] = std::move(it.items[it.i++]);   // the snapshot is ours; no copy
+                        B[a] = 1;
+                        ++pc;   // skip the exit jump
+                    } else {
+                        it.items.clear();
+                    }
+                    break;
+                }
+                case OpCode::NEWLIST: {
+                    unsigned b = ins::b(w), n = ins::c(w);
+                    std::vector<Value> items(R + b, R + b + n);
+                    R[a] = Value::list(std::move(items));
+                    B[a] = 1;
+                    break;
+                }
+                case OpCode::APPEND: R[a].l().items.push_back(R[ins::b(w)]); break;
+                case OpCode::NEWDICT: R[a] = Value::dict(); B[a] = 1; break;
+                case OpCode::DICTSET: {
+                    const Value& k = R[ins::b(w)];
+                    std::string ck;
+                    if (!dictKey(k, ck)) raise("TypeError", "unhashable type: '" + typeName(k) + "'", p.lines[cur]);
+                    R[a].d().set(ck, k, R[ins::c(w)]);
+                    break;
+                }
+                case OpCode::INDEX: {
+                    Value r = indexValue(R[ins::b(w)], R[ins::c(w)], p.lines[cur]);
+                    R[a] = std::move(r);
+                    B[a] = 1;
+                    break;
+                }
+                case OpCode::INDEXK: {
+                    unsigned k = ins::bx(w);
+                    if (R[a].isDict()) {
+                        long pos = R[a].d().find(p.constKeys[k], p.constHashes[k]);
+                        if (pos >= 0) {
+                            Value r = R[a].d().entries[static_cast<size_t>(pos)].second;
+                            R[a] = std::move(r);
+                            break;
+                        }
+                    }
+                    Value r = indexValue(R[a], p.consts[k], p.lines[cur]);   // also raises the KeyError
+                    R[a] = std::move(r);
+                    break;
+                }
+                case OpCode::SLICE: {
+                    unsigned c = ins::c(w);
+                    Value r = sliceValue(R[ins::b(w)], R[c], R[c + 1], p.lines[cur]);
+                    R[a] = std::move(r);
+                    B[a] = 1;
+                    break;
+                }
+                case OpCode::SETINDEX: setIndex(R[a], R[ins::b(w)], R[ins::c(w)], p.lines[cur]); break;
+                case OpCode::ATTR: {
+                    Value r = attribute(R[a], p.names[ins::bx(w)], p.lines[cur]);
+                    R[a] = std::move(r);
+                    break;
+                }
+                case OpCode::FORMAT: {
+                    const std::string& spec = p.names[ins::bx(w)];
+                    R[a] = Value::str(spec.empty() ? toStr(R[a]) : format(R[a], spec, p.lines[cur]));
+                    break;
+                }
+                case OpCode::CONCAT: {
+                    unsigned b = ins::b(w), n = ins::c(w);
+                    size_t total = 0;
+                    for (unsigned i = 0; i < n; ++i) total += R[b + i].s().s.size();
+                    std::string out;
+                    out.reserve(total);
+                    for (unsigned i = 0; i < n; ++i) out += R[b + i].s().s;
+                    R[a] = Value::str(std::move(out));
+                    B[a] = 1;
+                    break;
+                }
+                case OpCode::CALL: {
+                    unsigned site = ins::bx(w);
+                    const CallSite& cs = p.calls[site];
+                    int line = p.lines[cur];
+                    // P-code to p-code, positional only: arguments go register to
+                    // register, no argument vector.
+                    if (cs.kind == CallSite::Kind::Function && cs.kwNames.empty()) {
+                        auto it = pcode_.find(cs.def);
+                        if (it != pcode_.end()) {
+                            if (!p.calleeBound[site].load(std::memory_order_relaxed)) {
+                                if (!globals_.count(cs.name)) raise("NameError", "name '" + cs.name + "' is not defined yet", line);
+                                p.calleeBound[site].store(true, std::memory_order_relaxed);   // globals are never unbound
+                            }
+                            Value r = callPcode(*cs.def, *it->second, R, cs.args.data(), cs.args.size(), line);
+                            R[a] = std::move(r);
+                            B[a] = 1;
+                            break;
+                        }
+                    }
+                    Args args;
+                    Kwargs kw;
+                    buildArgs(cs, args, kw);
+                    Value r;
+                    switch (cs.kind) {
+                    case CallSite::Kind::Builtin:
+                        if (!kw.empty()) raise("TypeError", "builtins do not take keyword arguments yet", line);
+                        if (cs.builtin->needs != NeedNone) barrier();
+                        r = cs.builtin->fn(*this, args, line);
+                        break;
+                    case CallSite::Kind::Function:
+                        if (!globals_.count(cs.name)) raise("NameError", "name '" + cs.name + "' is not defined yet", line);
+                        r = callFunction(*cs.def, args, kw, line);
+                        break;
+                    case CallSite::Kind::Method: {
+                        const Value& self = R[cs.self];
+                        if (hasMethod(self, cs.method)) {
+                            if (!kw.empty()) raise("TypeError", "methods do not take keyword arguments yet", line);
+                            r = callMethod(self, cs.method, args, line);
+                        } else {
+                            Value fn = attribute(self, cs.name, line);   // reports the error
+                            r = callValue(fn, args, kw, line);
+                        }
+                        break;
+                    }
+                    case CallSite::Kind::Value: {
+                        Value fn = R[cs.self];
+                        r = callValue(fn, args, kw, line);
+                        break;
+                    }
+                    }
+                    R[a] = std::move(r);
+                    B[a] = 1;
+                    break;
+                }
+                case OpCode::RETURN: return std::move(R[a]);   // the frame ends: nothing reads it again
+                case OpCode::RETURNNIL: return Value();
+                case OpCode::RAISE: {
+                    const Value& v = R[a];
+                    int line = p.lines[cur];
+                    if (v.is<std::shared_ptr<const ExcValue>>()) {
+                        auto& e = *v.as<std::shared_ptr<const ExcValue>>();
+                        raise(e.cls, e.msg, line);
+                    }
+                    if (v.is<std::shared_ptr<const ExcClass>>()) raise(v.as<std::shared_ptr<const ExcClass>>()->name, "", line);
+                    raise("TypeError", "can only raise exceptions, not " + typeName(v), line);
+                }
+                case OpCode::RERAISE:
+                    if (tl_handling.empty()) raise("RuntimeError", "no active exception to re-raise", p.lines[cur]);
+                    throw tl_handling.back();
+                case OpCode::EXCMATCH: {
+                    const std::string& cls = p.names[ins::bx(w)];
+                    Value hc = lookupClass(cls, p.lines[cur]);
+                    if (!hc.is<std::shared_ptr<const ExcClass>>())
+                        raise("TypeError", "'" + cls + "' is not an exception class", p.lines[cur]);
+                    if (excMatches(cls, caught.cls)) ++pc;   // match: skip the jump to the next handler
+                    break;
+                }
+                case OpCode::EXCBIND:
+                    R[a] = Value(std::make_shared<const ExcValue>(ExcValue{caught.cls, caught.msg}));
+                    B[a] = 1;
+                    break;
+                case OpCode::HPUSH: tl_handling.push_back(caught); break;
+                case OpCode::HPOP: tl_handling.pop_back(); break;
+                case OpCode::RETHROW: throw caught;
+                case OpCode::SETTLE: settle(f); break;
+                case OpCode::FORCE:
+                    if (R[a].isFuture()) {   // a dispatched call: wait (its failure raises here, decision 17)
+                        Value v = force(R[a], f);
+                        R[a] = std::move(v);
+                    }
+                    break;
+                case OpCode::JMPNOPOOL: if (!pool_) pc += ins::sbx(w); break;
+                case OpCode::SPAWN: {
+                    const CallSite& cs = p.calls[ins::bx(w)];
+                    int line = p.lines[cur];
+                    Args args;
+                    Kwargs kw;
+                    buildArgs(cs, args, kw);
+                    if (pool_) {
+                        if (FutureP fut = tryDispatch(*cs.def, args, kw, line)) {
+                            if (cs.discard) addPending(f, std::move(fut), "");
+                            else addPendingReg(f, std::move(fut), &R[a], &B[a]);
+                            break;
+                        }
+                    }
+                    Value r = callFunction(*cs.def, args, kw, line);   // inline, as the tree-walker does
+                    if (!cs.discard) {
+                        R[a] = std::move(r);
+                        B[a] = 1;
+                    }
+                    break;
+                }
+                case OpCode::PMAP: {
+                    const CallSite& cs = p.calls[ins::bx(w)];
+                    size_t npos = cs.args.size() - cs.kwNames.size();
+                    std::vector<MapItem> items;
+                    auto& rows = R[cs.self].l().items;
+                    items.reserve(rows.size());
+                    for (auto& row : rows) {
+                        auto& vals = row.l().items;
+                        MapItem it;
+                        it.args.assign(vals.begin(), vals.begin() + static_cast<long>(npos));
+                        for (size_t i = npos; i < vals.size(); ++i) it.kw.emplace_back(cs.kwNames[i - npos], vals[i]);
+                        items.push_back(std::move(it));
+                    }
+                    Value r = parallelMap(*cs.def, std::move(items), p.lines[cur]);
+                    R[a] = std::move(r);
+                    B[a] = 1;
+                    break;
+                }
+                }
+            }
+        } catch (const DolphinError& e) {
+            bool handled = false;
+            for (const ExcEntry& x : p.excTable) {
+                if (cur < x.start || cur >= x.end) continue;
+                if (x.handlerBody) {   // leaving a handler body: that handling is over
+                    tl_handling.pop_back();
+                    continue;
+                }
+                caught = preferEarlier(f, e);
+                pc = x.handler;
+                handled = true;
+                break;
+            }
+            if (!handled) throw;
+        } catch (...) {   // DeferredFailure and anything else: just end handling on the way out
+            for (const ExcEntry& x : p.excTable)
+                if (x.handlerBody && cur >= x.start && cur < x.end) tl_handling.pop_back();
+            throw;
+        }
+    }
 }
 
 } // namespace dolphin

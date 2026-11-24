@@ -207,6 +207,7 @@ struct Index : Expr {
     /// When @c index is a str or int literal: its dict key (dictKey()), so
     /// `r["station"]` on a dict looks up without building anything.
     std::string constKey;
+    uint64_t constHash = 0;   ///< Dict::hashKey(constKey), computed once.
     bool hasConstKey = false;
     Index(int l, ExprP o, ExprP i);   // ast.cpp
 };

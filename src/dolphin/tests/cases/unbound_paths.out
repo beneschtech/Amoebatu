@@ -1,0 +1,24 @@
+after_if True -> 1
+after_if False -> unbound
+after_if_else False -> 2
+after_elif 1 -> one
+after_elif 2 -> two
+after_elif 3 -> many
+after_while 3 -> 2
+after_while 0 -> unbound
+after_for [1, 2] -> 2
+after_for [] -> unbound
+after_break [1, 5] -> 5
+after_break [1, 2] -> unbound
+in_handler True -> unbound
+in_handler False -> 1
+after_try True -> unbound
+after_try False -> 1
+cond_and 5 -> 5
+cond_and 50 -> unbound
+cond_or 50 -> 50
+cond_or 5 -> unbound
+chain 3 -> 3
+chain 9 -> unbound
+after_return True -> early
+after_return False -> late

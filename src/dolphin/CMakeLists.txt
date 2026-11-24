@@ -34,6 +34,7 @@ add_library(dolphin_core STATIC
   src/costmodel.cpp
   src/topology.cpp
   src/sharedprofile.cpp
+  src/pcode.cpp
   src/analyzer.cpp
   src/interp.cpp
   src/builtins.cpp

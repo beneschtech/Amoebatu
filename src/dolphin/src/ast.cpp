@@ -88,6 +88,7 @@ Index::Index(int l, ExprP o, ExprP i) : Expr(K::Index, l), obj(std::move(o)), in
     else if (index->k == K::Int) key = Value(static_cast<const IntLit&>(*index).v);
     else return;
     hasConstKey = dictKey(key, constKey);
+    if (hasConstKey) constHash = Dict::hashKey(constKey);
 }
 
 std::string needsToString(unsigned n) {

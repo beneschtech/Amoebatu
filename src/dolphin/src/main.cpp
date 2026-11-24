@@ -17,6 +17,9 @@
  * | `--stats`       | After running, print wall time, CPU time (user + system, all threads), and dispatch/output statistics to stderr. |
  * | `--sync-output` | Write output directly from print() instead of via the printer thread. |
  * | `--trace`       | Log every dispatch decision (and why), failure, and parallel map to stderr. |
+ * | `--engine E`    | `tree` (default) runs function bodies on the tree-walker; `pcode` compiles them to p-code (doc/PCODE.md). |
+ * | `--disasm`      | Compile every function to p-code and print the listing. |
+ * | `--opt N`       | P-code optimization: 1 (default) or 0 (plain, for comparison). |
  * | `--fixed-thresholds` | Use the old constant thresholds (calls ≥ 50 µs, batches ~250 µs) instead of the measured ones. For A/B comparison. |
  *
  * Environment: `DOLPHIN_SHM=0` turns off the shared machine profile (SharedProfile).
@@ -28,6 +31,7 @@
  * analyzeNeeds() → Interp.
  * The options just stop it early and print what's been built.
  */
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -45,7 +49,7 @@
 using namespace dolphin;
 
 static int usage() {
-    std::cerr << "usage: dolphin [--tokens|--ast|--needs|--check] [--threads N] [--stats] [--sync-output] [--trace] [--fixed-thresholds] file.dol [args...]\n";
+    std::cerr << "usage: dolphin [--tokens|--ast|--needs|--check] [--threads N] [--stats] [--sync-output] [--trace] [--fixed-thresholds] [--engine tree|pcode] [--opt 0|1] [--disasm] file.dol [args...]\n";
     return 2;
 }
 
@@ -56,10 +60,12 @@ int main(int argc, char** argv) {
     bool asyncOutput = true;
     bool traceOn = false;
     bool fixedThresholds = false;
+    bool pcode = false;
+    bool optimize = true;
     int i = 1;
     for (; i < argc && std::strncmp(argv[i], "--", 2) == 0; ++i) {
         std::string opt = argv[i] + 2;
-        if (opt == "tokens" || opt == "ast" || opt == "needs" || opt == "check") {
+        if (opt == "tokens" || opt == "ast" || opt == "needs" || opt == "check" || opt == "disasm") {
             mode = opt;
         } else if (opt == "threads" && i + 1 < argc) {
             char* end = nullptr;
@@ -74,6 +80,14 @@ int main(int argc, char** argv) {
             traceOn = true;
         } else if (opt == "fixed-thresholds") {
             fixedThresholds = true;
+        } else if (opt == "opt" && i + 1 < argc) {
+            std::string o = argv[++i];
+            if (o != "0" && o != "1") return usage();
+            optimize = o == "1";
+        } else if (opt == "engine" && i + 1 < argc) {
+            std::string e = argv[++i];
+            if (e != "pcode" && e != "tree") return usage();
+            pcode = e == "pcode";
         } else {
             return usage();
         }
@@ -126,6 +140,16 @@ int main(int argc, char** argv) {
         Interp interp(m, threads, asyncOutput);
         interp.setTrace(traceOn);
         interp.setFixedThresholds(fixedThresholds);
+        interp.setOptimize(optimize);
+        if (pcode || mode == "disasm") interp.setPcode(true);
+        if (mode == "disasm") {
+            // Functions in source order; ones the compiler couldn't handle are listed as such.
+            std::vector<std::pair<int, const PCode*>> fns;
+            for (auto& [d, p] : interp.pcodes()) fns.emplace_back(d->line, p.get());
+            std::sort(fns.begin(), fns.end());
+            for (auto& [line, p] : fns) std::cout << disassemble(*p) << "\n";
+            return 0;
+        }
         // CPU time (all threads, user + system) next to wall time: under load
         // from other programs, wall time rewards a program for grabbing more
         // threads; CPU time shows what its run actually cost the machine.

@@ -1,0 +1,115 @@
+# Locals assigned on only some paths: each read must raise UnboundLocalError
+# exactly when CPython does. Guards the p-code definite-assignment pass.
+
+def after_if(flag):
+    if flag:
+        x = 1
+    return x
+
+def after_if_else(flag):
+    if flag:
+        x = 1
+    else:
+        x = 2
+    return x
+
+def after_elif(n):
+    if n == 1:
+        x = "one"
+    elif n == 2:
+        y = "two"
+        return y
+    else:
+        x = "many"
+    return x
+
+def after_while(n):
+    i = 0
+    while i < n:
+        last = i
+        i += 1
+    return last
+
+def after_for(xs):
+    for v in xs:
+        seen = v
+    return seen
+
+def after_break(xs):
+    for v in xs:
+        if v > 2:
+            found = v
+            break
+    return found
+
+def in_handler(fail):
+    try:
+        if fail:
+            raise ValueError("x")
+        got = 1
+    except ValueError:
+        return got
+    return got
+
+def after_try(fail):
+    try:
+        if fail:
+            raise ValueError("x")
+        got = 1
+    except ValueError:
+        pass
+    return got
+
+def cond_and(a):
+    if a > 0 and a < 10:
+        z = a
+    return z
+
+def cond_or(a):
+    if a < 0 or a > 10:
+        w = a
+    return w
+
+def chain(a):
+    if 0 < a < 5:
+        q = a
+    return q
+
+def after_return(flag):
+    if flag:
+        return "early"
+    else:
+        r = "late"
+    return r
+
+def try_all(name, f, arg):
+    try:
+        print(name, arg, "->", f(arg))
+    except NameError:
+        print(name, arg, "-> unbound")
+
+def main():
+    try_all("after_if", after_if, True)
+    try_all("after_if", after_if, False)
+    try_all("after_if_else", after_if_else, False)
+    try_all("after_elif", after_elif, 1)
+    try_all("after_elif", after_elif, 2)
+    try_all("after_elif", after_elif, 3)
+    try_all("after_while", after_while, 3)
+    try_all("after_while", after_while, 0)
+    try_all("after_for", after_for, [1, 2])
+    try_all("after_for", after_for, [])
+    try_all("after_break", after_break, [1, 5])
+    try_all("after_break", after_break, [1, 2])
+    try_all("in_handler", in_handler, True)
+    try_all("in_handler", in_handler, False)
+    try_all("after_try", after_try, True)
+    try_all("after_try", after_try, False)
+    try_all("cond_and", cond_and, 5)
+    try_all("cond_and", cond_and, 50)
+    try_all("cond_or", cond_or, 50)
+    try_all("cond_or", cond_or, 5)
+    try_all("chain", chain, 3)
+    try_all("chain", chain, 9)
+    try_all("after_return", after_return, True)
+    try_all("after_return", after_return, False)
