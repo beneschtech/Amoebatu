@@ -10,7 +10,8 @@ Design: [`doc/LANGUAGE.md`](../../doc/LANGUAGE.md).
 A tree-walking interpreter that defines the language's semantics, now able to
 run independent calls on local threads. `--threads 1` is the sequential
 reference; any other thread count must produce byte-identical output, and
-the test suite checks that at 1, 2, 4 and 8 threads and in automatic mode.
+the test suite checks that at 1, 2, 4 and 8 threads and in automatic mode, on both
+engines (tree-walker and p-code).
 
 | Piece | State |
 |---|---|
@@ -45,6 +46,8 @@ dolphin file.dol [args...]     # analyze, run; calls main(*args) if defined
 dolphin --needs file.dol       # needs per function, and whether its calls can run in parallel
 dolphin --threads N file.dol   # exactly N threads (1 = sequential)
 dolphin file.dol               # automatic: sized from the CPU topology, adapts to load
+dolphin --engine pcode f.dol   # run function bodies as p-code (doc/PCODE.md); default: tree-walker
+dolphin --disasm file.dol      # print every function's p-code
 dolphin --stats file.dol       # wall time, dispatch counts and output batching, on stderr
 dolphin --sync-output file.dol # print() writes directly instead of via the printer thread
 dolphin --trace file.dol       # every dispatch decision and why, failures, parallel maps (stderr)

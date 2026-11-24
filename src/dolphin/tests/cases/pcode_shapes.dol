@@ -1,0 +1,107 @@
+# Shapes the p-code compiler must get right (register allocation, jumps,
+# exception table). Expected output comes from the tree-walker and CPython.
+
+def sq(x):
+    return x * x
+
+def label(n, prefix="item", width=3):
+    return f"{prefix}-{sq(n):>4}:{width}"
+
+def nested_parts(a, b):
+    return f"[{sq(a) + sq(b)}|{label(a)}|{[sq(a), sq(b), a + b]}]"
+
+def lists(n):
+    return [[sq(i), [i, sq(i + 1)]] for i in range(n) if i % 2 == 0]
+
+def chain(a, b, c):
+    return [a < b <= c, a == b != c, 1 < sq(a) < 100]
+
+def ops(x, y):
+    return [(x and y), (x or y), (not x), (y and sq(y)), (0 or y)]
+
+def loops():
+    out = []
+    i = 0
+    while i < 10:
+        i += 1
+        if i % 3 == 0:
+            continue
+        if i > 7:
+            break
+        for j in range(3):
+            if j == 2:
+                break
+            out.append(i * 10 + j)
+    return out
+
+def handlers(vals):
+    log = []
+    for v in vals:
+        try:
+            if v == 0:
+                raise ValueError("zero")
+            if v < 0:
+                log.append(10 // v + int("x"))
+            log.append(100 // v)
+        except ValueError:
+            log.append("VE")
+            if v == 0:
+                continue
+        except ZeroDivisionError:
+            log.append("ZD")
+    return log
+
+def reraise(v):
+    try:
+        try:
+            return 10 // v
+        except ZeroDivisionError:
+            raise
+    except ZeroDivisionError:
+        return "outer caught"
+
+def ret_in_handler(v):
+    for i in range(3):
+        try:
+            if i == v:
+                raise KeyError("k")
+        except KeyError:
+            return i * 100
+    return -1
+
+def unbound(flag):
+    if flag:
+        y = 1
+    return y
+
+def index_aug():
+    d = {"a": 1, "b": [1, 2, 3]}
+    d["a"] += 10
+    d["b"][1] *= 7
+    lst = [1, 2, 3]
+    lst[-1] -= 5
+    return [d, lst]
+
+def outer(n):
+    def inner(m):
+        return m + 1
+    return [inner(k) for k in range(n)]
+
+def main():
+    print(label(4), label(5, "x"), label(n=2, width=5))
+    print(nested_parts(2, 3))
+    print(lists(5))
+    print(chain(1, 2, 2), chain(3, 3, 4))
+    print(ops(0, 5), ops(3, 0))
+    print(loops())
+    print(handlers([5, 0, 2]))
+    print(reraise(2), reraise(0))
+    print(ret_in_handler(1), ret_in_handler(7))
+    print(index_aug())
+    print(outer(3))
+    print(unbound(True))
+    try:
+        print(unbound(False))
+    except NameError:
+        print("unbound")
+    print(handlers([-1]))

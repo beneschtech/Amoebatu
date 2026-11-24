@@ -47,6 +47,7 @@
 
 #include "ast.hpp"
 #include "costmodel.hpp"
+#include "pcode.hpp"
 #include "topology.hpp"
 #include "runtime.hpp"
 #include "value.hpp"
@@ -120,6 +121,17 @@ public:
     const Topology& topology() const { return topo_; }
     /// @brief The cost model's current measurements (for `--stats`).
     const CostModel& costModel() const { return cost_; }
+    /**
+     * @brief Run function bodies as p-code (`--engine=pcode`) instead of on the tree-walker.
+     *
+     * Compiles every function up front (single-threaded, before run()). A
+     * function the compiler can't handle stays on the tree-walker.
+     */
+    void setPcode(bool on);
+    /// @brief P-code optimization level (`--opt 0|1`, default 1). Set before setPcode().
+    void setOptimize(bool on) { optimize_ = on; }
+    /// @brief Compiled functions (for `--disasm`); empty unless setPcode(true).
+    const std::unordered_map<const Def*, std::unique_ptr<PCode>>& pcodes() const { return pcode_; }
     /// @brief Use the old constant thresholds instead of measured ones (`--fixed-thresholds`).
     void setFixedThresholds(bool on) { cost_.setFixed(on); }
     /// @brief Log every dispatch decision, with its reason, to stderr (`dolphin --trace`).
@@ -177,7 +189,14 @@ private:
         std::string name;    ///< Variable the result is assigned to; empty for `f(x)` as a statement.
         Value prev;          ///< That variable's value before the assignment, restored if the call fails.
         bool hadPrev = false;
+        /// P-code: the register the result goes to (instead of @c name), and its
+        /// bound flag. Both live in the frame's register file, which outlives
+        /// every pending call (a frame joins its calls before it's popped).
+        Value* reg = nullptr;
+        uint8_t* regBound = nullptr;
     };
+    /// @brief One element of a parallel map: its evaluated arguments.
+    struct MapItem { Args args; Kwargs kw; };
     /// @brief Execution context for one function activation (or the module).
     struct Frame {
         Scope* vars;                   ///< Where assignments go.
@@ -229,6 +248,14 @@ private:
     bool compare(Op op, const Value& a, const Value& b, int line) const;
     /// @brief `obj[i]` or `obj[lo:hi]` on str, bytes or list.
     Value subscript(const Value& obj, const Expr& idx, Frame& f, int line);
+    /// @brief `obj[key]` with the key already evaluated (dict, str, bytes, list).
+    Value indexValue(const Value& obj, const Value& key, int line) const;
+    /// @brief `obj[lo:hi]` with the bounds already evaluated (None = omitted).
+    Value sliceValue(const Value& obj, const Value& lo, const Value& hi, int line) const;
+    /// @brief `obj[key] = v` on a dict or list (barrier first: it's a mutation).
+    void setIndex(const Value& obj, const Value& key, const Value& v, int line);
+    /// @brief Prefix operator `not`, `-`, `+` or `~`.
+    Value unaryValue(Op op, const Value& v, int line) const;
     /// @brief `obj.name`: a BoundMethod, or a field of an exception.
     Value attribute(const Value& obj, const std::string& name, int line) const;
     /// @}
@@ -239,6 +266,23 @@ private:
     /// @brief Is @p m a method of @p obj's type? (What makes `obj.m` valid.)
     static bool hasMethod(const Value& obj, Method m);
     Value callFunction(const Def& d, Args& args, Kwargs& kw, int line);        ///< Bind parameters, run a user function body.
+    /// @brief Run a function's p-code. @p regs holds its registers (parameters
+    ///        bound), @p bound their assigned flags. Returns the return value.
+    Value execPcode(const PCode& p, Frame& f, Value* regs, uint8_t* bound);
+    /// @brief Call p-code function @p d with arguments taken straight from the
+    ///        caller's registers @p R (positional only): no argument vector.
+    Value callPcode(const Def& d, const PCode& pc, const Value* R, const uint8_t* argRegs, size_t n, int line);
+    /// @brief The frame/join/cost wrapper around one function body, shared by every
+    ///        way of calling a function. Exactly one of @p pc (with @p R, @p B) and
+    ///        @p locals is used.
+    Value runBody(const Def& d, const PCode* pc, Value* R, uint8_t* B, Scope* locals, int line);
+    /// @brief Run @p d over @p items in batches on the pool; results in element order
+    ///        (the shared core of a parallel comprehension, both engines).
+    Value parallelMap(const Def& d, std::vector<MapItem> items, int line);
+    /// @brief Record a dispatched call whose result goes to register @p reg (p-code).
+    void addPendingReg(Frame& f, FutureP fut, Value* reg, uint8_t* regBound);
+    /// @brief Compile every function in @p b (recursively) to p-code.
+    void compileAll(const Block& b);
     /// @}
 
     /// @name Parallel execution
@@ -320,6 +364,9 @@ private:
 
     /// Work, rate, submit-cost and wake-latency measurements behind every dispatch decision
     /// (costmodel.hpp). Tracks every parallel-safe function, registered at construction.
+    bool usePcode_ = false;   ///< setPcode().
+    bool optimize_ = true;    ///< setOptimize().
+    std::unordered_map<const Def*, std::unique_ptr<PCode>> pcode_;   ///< Compiled functions; read-only after setPcode().
     Topology topo_;   ///< Set when the thread count is automatic.
     CostModel cost_;
     /// @brief Is a single call to @p d expensive enough to be worth a thread?

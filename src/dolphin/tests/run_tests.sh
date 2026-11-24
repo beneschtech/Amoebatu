@@ -14,8 +14,22 @@
 set -u
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 THREADS=${THREADS:-"1 2 4 8 auto"}
-# Thread-count arguments for one entry of $THREADS.
-thr() { [ "$1" = auto ] || echo "--threads $1"; }
+# Every test runs on each engine unless ENGINE picks one: tree, pcode, or
+# pcode0 (p-code without optimizations, so each optimization is checked
+# against the plain form).
+if [ -z "${ENGINE:-}" ]; then
+    rc=0
+    for e in tree pcode pcode0; do
+        echo "== engine: $e"
+        ENGINE=$e "$0" "$@" || rc=1
+    done
+    exit $rc
+fi
+# Thread-count (and engine) arguments for one entry of $THREADS.
+thr() {
+    if [ "$ENGINE" = pcode0 ]; then echo "--engine pcode --opt 0"; else echo "--engine $ENGINE"; fi
+    [ "$1" = auto ] || echo "--threads $1"
+}
 cd "$(dirname "$0")/cases" || exit 2
 pass=0 fail=0
 report() { if [ "$1" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $2"; fi; }
