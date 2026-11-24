@@ -1,7 +1,8 @@
 #!/bin/sh
 # Golden tests for Dolphin. Usage: run_tests.sh path/to/dolphin
 #
-# Every program runs at each thread count in $THREADS (default "1 2 4 8").
+# Every program runs at each thread count in $THREADS (default "1 2 4 8 auto";
+# "auto" passes no --threads, so the pool sizes itself and adapts to load).
 # Parallel runs must produce byte-identical output to sequential ones; that's
 # the core promise of the M2 runtime.
 #   cases/X.dol + X.out    stdout must match, exit 0
@@ -12,7 +13,9 @@
 # Plus the examples in ../examples against the bulletins and fixtures in data/.
 set -u
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
-THREADS=${THREADS:-"1 2 4 8"}
+THREADS=${THREADS:-"1 2 4 8 auto"}
+# Thread-count arguments for one entry of $THREADS.
+thr() { [ "$1" = auto ] || echo "--threads $1"; }
 cd "$(dirname "$0")/cases" || exit 2
 pass=0 fail=0
 report() { if [ "$1" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $2"; fi; }
@@ -20,18 +23,18 @@ for src in *.dol; do
     name=${src%.dol}
     for t in $THREADS; do
         if [ -f "$name.out" ]; then
-            "$BIN" --threads "$t" "$src" 2>/dev/null | diff -u "$name.out" - >/dev/null; report $? "$name (stdout, $t threads)"
+            "$BIN" $(thr "$t") "$src" 2>/dev/null | diff -u "$name.out" - >/dev/null; report $? "$name (stdout, $t threads)"
         fi
         if [ -f "$name.out" ] && [ "$t" = 1 ]; then   # the synchronous-output path too
             "$BIN" --threads 1 --sync-output "$src" 2>/dev/null | diff -u "$name.out" - >/dev/null; report $? "$name (stdout, --sync-output)"
         fi
         if [ -f "$name.both" ]; then
-            "$BIN" --threads "$t" "$src" > /tmp/dolphin_both.$$ 2>&1
+            "$BIN" $(thr "$t") "$src" > /tmp/dolphin_both.$$ 2>&1
             diff -u "$name.both" /tmp/dolphin_both.$$ >/dev/null; report $? "$name (stdout+stderr order, $t threads)"
             rm -f /tmp/dolphin_both.$$
         fi
         if [ -f "$name.err" ]; then
-            if "$BIN" --threads "$t" "$src" >/dev/null 2>/tmp/dolphin_err.$$; then report 1 "$name (expected failure, $t threads)"
+            if "$BIN" $(thr "$t") "$src" >/dev/null 2>/tmp/dolphin_err.$$; then report 1 "$name (expected failure, $t threads)"
             else diff -u "$name.err" /tmp/dolphin_err.$$ >/dev/null; report $? "$name (stderr, $t threads)"; fi
         fi
     done
@@ -44,7 +47,7 @@ cd ..
 example() {   # example <name> <expected-output> <args...>
     name=$1 expected=$2; shift 2
     for t in $THREADS; do
-        "$BIN" --threads "$t" "../examples/$name.dol" "$@" 2>&1 | diff -u "$expected" - >/dev/null; report $? "example $name $* ($t threads)"
+        "$BIN" $(thr "$t") "../examples/$name.dol" "$@" 2>&1 | diff -u "$expected" - >/dev/null; report $? "example $name $* ($t threads)"
     done
 }
 example grib_ls grib_ls.out data/synthetic.grib2

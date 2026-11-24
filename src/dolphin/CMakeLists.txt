@@ -32,6 +32,7 @@ add_library(dolphin_core STATIC
   src/resolver.cpp
   src/runtime.cpp
   src/costmodel.cpp
+  src/topology.cpp
   src/analyzer.cpp
   src/interp.cpp
   src/builtins.cpp

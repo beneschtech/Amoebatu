@@ -199,19 +199,43 @@ Today every worker reading `WX_CODES` updates the same reference counts, which p
 
 Cost: one copy per thread per global per mutation. Read-mostly tables, the common case in decoders, are copied once per thread.
 
-## 8a. Runtime under load: fewer threads, not fewer dispatches
+## 8a. Runtime under load
 
-Measured 2026-11-24 on an i5-12600K (6 performance + 4 efficiency cores, 16 threads), with ten METAR runs at once (62 threads on the machine), comparing CPU time per run:
+Measured 2026-11-24 on an i5-12600K (6 performance cores with SMT + 4 efficiency cores: 10 cores, 16 hardware threads).
 
-- **Dispatch count barely moves CPU cost.** At 8 threads the measured cost model dispatched 42% less than fixed thresholds (74 vs 128) and saved 5% CPU. At 16 threads it dispatched 25% less and used 3% *more*. Per-dispatch overhead is small.
-- **Thread count does.** Under load, a 16-thread run cost 51% more CPU than a 1-thread run of the same work. The extra cost comes from threads interfering with each other (shared reference counts, memory traffic, SMT siblings), and it grows with the number of active threads.
-- **Load makes every thread slower.** The same 1-thread run cost 1430 ms CPU idle and 2167 ms under load (+52%); the measured rate fell from ~33 to ~20 Mops/s. On a hybrid chip, loaded threads land on efficiency cores.
+**First pass (mixed thread counts, ten runs at once).** Halving dispatches saved at most 5% CPU, so dispatch thresholds are not the lever. Per-run CPU rose from 1430 ms idle to 2167 ms under load, and a 16-thread run used 51% more CPU than a 1-thread run.
 
-So the cost model detects load correctly (wake latency rises from tens of µs to milliseconds) but adjusts the wrong thing. Changes, as runtime work alongside P1:
+**Second pass (ten identical runs at once, per configuration)** separated the causes:
 
-1. **Adapt active workers to load.** When wake latency shows no free cores, park workers so fewer threads compete; unpark when it falls. Dispatch thresholds stay as they are.
-2. **Default thread count from performance cores,** not hardware threads: on hybrid chips, count P-cores (and their SMT siblings only if measured to help). 6 or 12 on the 12600K, not 16.
-3. **Measure with CPU time.** `--stats` reports it; under multi-program load it, not wall time, is the figure of merit, since Linux shares CPU per thread and wall time rewards a program for grabbing more threads.
+| Ten copies at | Last finishes | User CPU (total) | Sys CPU |
+|---|---|---|---|
+| 1 thread | 2335–2402 ms | 18.3 s | 0.8 s |
+| 2 threads | 2167–2275 ms | 28.3 s | 1.0 s |
+| 4 threads | 2164–2192 ms | 31.5 s (user+sys) | |
+| 16 threads | 2201–2465 ms | 30.9 s | 1.2 s |
+| automatic | 2206–2447 ms | 30.1 s | 1.1 s |
+
+- **The extra CPU is the hardware, not Dolphin.** Ten single-threaded copies are ten threads on ten physical cores. Anything more puts SMT siblings on shared cores, and each thread runs slower, so the same instructions take more CPU time. The extra is user time, not system time (no extra polling or locking), and it doesn't grow past 2 threads per copy. The first pass's "threads interfering through shared reference counts" was mostly this.
+- **Once the machine is saturated, thread count barely matters.** Every configuration finishes within about ±5% and uses about the same total CPU, because the machine does the same work either way. CPU time isn't a fair cost measure under SMT: it counts hardware-thread time, and a hardware thread sharing a core does less per second.
+- **Load makes every thread slower** (shared cores, E-cores, lower turbo). Nothing in Dolphin can change that.
+
+So the adaptive pool (R1, built) is about *not wasting* resources rather than winning under saturation:
+
+- **Automatic thread count** (no `--threads`): all workers are created, the topology's suggestion starts active (P-core threads on Intel hybrid, the fastest group on asymmetric ARM, one per physical core elsewhere), capped by the affinity mask and cgroup quota.
+- **AIMD on contention** (run-queue wait from `/proc/thread-self/schedstat`): above 25%, park a quarter of the workers; below 10% with work waiting, add one.
+- **Every addition is checked against throughput:** if it didn't add half an average worker's share, it's taken back and becomes a ceiling for 10 s. This handles SMT, E-cores, Bulldozer modules and NUMA without per-vendor rules.
+- **Idle machine result:** about 3% slower than `--threads 16` for about 11% less CPU (469–482 ms, 3.5–3.6 s CPU vs 452–470 ms, 4.0–4.1 s). On this machine it started at 12, tried 13 and 14, and settled at 13.
+- **Saturated:** the same as fixed counts (table above).
+- **Not tested here:** NUMA (multi-socket Xeon/Opteron), Bulldozer modules and big.LITTLE need other hardware. The rule doesn't depend on them, but it should be measured there.
+
+Next for scheduling (§8b): a per-machine profile in shared memory, so runs start from what earlier runs learned and concurrent Dolphin programs can see each other's worker counts.
+
+## 8b. Machine profile in shared memory (next)
+
+- **Segment:** POSIX shared memory per user (`/dev/shm/dolphin-<uid>`, mode 0600, so other users can't influence scheduling), with a magic number and version. Everything read from it is treated as a hint and bounds-checked.
+- **Learned profile:** the ceiling found by the throughput check, typical wake latency and execution rate. A new run starts from these instead of the topology guess, so nothing is re-learned at startup, and the profile survives between runs until reboot (LANGUAGE.md open decision 2: "measurements should be cached and refreshed rarely").
+- **Live coordination:** one slot per running Dolphin process (pid, start time, active workers, demand), updated with lock-free atomics at each control step. A process can then aim for a fair share of the cores directly, instead of each one discovering contention on its own. A slot whose process has died (pid gone, or no heartbeat) is reclaimed.
+- **Later:** neighbord exchanges the same figures between nodes, so the local profile becomes the node's entry in the cluster's view.
 
 ## 9. Open questions
 
@@ -225,7 +249,8 @@ So the cost model detects load correctly (wake latency rises from tens of µs to
 
 | Step | Deliverable | Done when |
 |---|---|---|
-| R1 | Load-adaptive worker count and P-core default thread count (§8a) | Under the ten-run load, CPU per run falls at 8–16 threads with no loss when the machine is idle |
+| R1 | Load-adaptive worker count and topology-based default thread count (§8a) | **Built.** Idle: within ~3% of 16 threads for ~11% less CPU. Saturated: same as fixed counts |
+| R2 | Machine profile and live coordination in shared memory (§8b) | Second run starts at the learned worker count; concurrent runs converge on fair shares |
 | P1 | Compiler (AST → p-code) and p-code interpreter behind `--engine=pcode`, tree-walker kept as `--engine=tree` | All golden tests, the CPython oracle and the METAR loads match at 1–8 threads, and TSan is clean |
 | P2 | `.dcl` writer, loader, verifier; `dolphin -c file.dol` → `file.dcl`; `dolphin file.dcl`; `--disasm` | Round trip: compile, write, load, run gives identical output. Fuzzed files are rejected, never crash. |
 | P3 | Global replication (§8), if measurements support it | Speedup at 8–16 threads improves on METAR |

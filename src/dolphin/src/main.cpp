@@ -13,7 +13,7 @@
  * | `--ast`         | Print the parsed tree, with bindings and needs, and exit.  |
  * | `--needs`       | Print each function's needs and whether its calls can run in parallel. |
  * | `--check`       | Parse and analyze only; exit 0 if the program is well-formed. |
- * | `--threads N`   | Threads to run on, including the main one. 1 = sequential. Default: one per hardware thread. |
+ * | `--threads N`   | Run on exactly N threads, including the main one (1 = sequential). Default: automatic, adapting to load (see ThreadPool). |
  * | `--stats`       | After running, print wall time, CPU time (user + system, all threads), and dispatch/output statistics to stderr. |
  * | `--sync-output` | Write output directly from print() instead of via the printer thread. |
  * | `--trace`       | Log every dispatch decision (and why), failure, and parallel map to stderr. |
@@ -144,6 +144,13 @@ int main(int argc, char** argv) {
             std::snprintf(cbuf, sizeof cbuf, ", cpu %.0f ms (user %.0f, sys %.0f)", user + sys, user, sys);
             std::cerr << "dolphin: " << interp.threads() << " thread(s), " << ms << " ms" << cbuf
                       << ", allocator " << DOLPHIN_ALLOCATOR_NAME;
+            if (const ThreadPool* p = interp.pool(); p && p->adaptive()) {
+                const PoolStats& s = p->stats();
+                std::cerr << "; adaptive: up to " << interp.threads() << ", started " << interp.topology().start << " ("
+                          << interp.topology().basis << "), now " << interp.activeThreads() << " (range "
+                          << s.activeMin + 1 << "-" << s.activeMax + 1 << "; +" << s.raises << " -" << s.cuts << ", "
+                          << s.reverted << " reverted), contention " << s.contentionPermille / 10.0 << "%";
+            }
             if (PoolStats* ps = interp.stats())
                 std::cerr << "; tasks dispatched " << ps->submitted << " (run by workers " << ps->byWorkers
                           << ", by waiting threads " << ps->byHelpers << "), ran inline because pool was busy "

@@ -10,7 +10,7 @@ Design: [`doc/LANGUAGE.md`](../../doc/LANGUAGE.md).
 A tree-walking interpreter that defines the language's semantics, now able to
 run independent calls on local threads. `--threads 1` is the sequential
 reference; any other thread count must produce byte-identical output, and
-the test suite checks that at 1, 2, 4 and 8 threads.
+the test suite checks that at 1, 2, 4 and 8 threads and in automatic mode.
 
 | Piece | State |
 |---|---|
@@ -43,7 +43,8 @@ C++17 or later (the Amoebatu tree builds it as C++20), no dependencies. Inside t
 ```sh
 dolphin file.dol [args...]     # analyze, run; calls main(*args) if defined
 dolphin --needs file.dol       # needs per function, and whether its calls can run in parallel
-dolphin --threads N file.dol   # 1 = sequential; default = one per hardware thread
+dolphin --threads N file.dol   # exactly N threads (1 = sequential)
+dolphin file.dol               # automatic: sized from the CPU topology, adapts to load
 dolphin --stats file.dol       # wall time, dispatch counts and output batching, on stderr
 dolphin --sync-output file.dol # print() writes directly instead of via the printer thread
 dolphin --trace file.dol       # every dispatch decision and why, failures, parallel maps (stderr)
@@ -134,6 +135,13 @@ only later (M5) on another node:
   shows the current measurements and thresholds, and `--trace` shows each decision with
   its numbers. `--fixed-thresholds` restores the old constants (calls ≥ 50 µs, batches
   ~250 µs) for A/B comparison.
+- **How many threads.** (`src/topology.hpp`, `ThreadPool` in `src/runtime.hpp`) Without
+  `--threads`, the pool creates a worker per CPU it may use (affinity mask and cgroup
+  quota) and starts with the topology's suggestion active: P-core threads on Intel hybrid
+  chips, one per physical core elsewhere. Every 100 ms it adapts, using figures from
+  running tasks only: run-queue wait above 25% parks a quarter of the workers; below 10%
+  with work waiting, it adds one, and takes it back if throughput didn't rise. `--stats`
+  shows the range it used; `--trace` logs each change.
 - **Only when there's room.** If the pool's queue is backed up, the call runs inline.
   Under heavy load this degrades to sequential execution instead of piling up threads.
   A thread waiting on a future that's still queued runs that task itself, but never

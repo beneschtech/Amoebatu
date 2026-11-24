@@ -39,11 +39,20 @@ static thread_local std::vector<DolphinError> tl_handling;   // exceptions being
 Interp::Interp(const Module& m, unsigned threads, bool asyncOutput) : mod_(m) {
     installBuiltins();
     if (asyncOutput) out_ = std::make_unique<OutputChannel>(stdout);
-    if (threads == 0) threads = std::max(1u, std::thread::hardware_concurrency());
-    if (threads > 1) {
-        pool_ = std::make_unique<ThreadPool>(threads - 1);   // the main thread is the other one
+    // threads == 0: automatic. Create a worker for every CPU we may use, start
+    // with the topology's suggestion active, and let the pool adapt to load.
+    // An explicit count is fixed (reproducible benchmarks).
+    if (threads == 0) {
+        topo_ = Topology::detect();
+        if (topo_.hardLimit > 1)
+            pool_ = std::make_unique<ThreadPool>(topo_.hardLimit - 1, topo_.start - 1, true);   // main is the other thread
+    } else if (threads > 1) {
+        pool_ = std::make_unique<ThreadPool>(threads - 1);
+    }
+    if (pool_) {
         pool_->setTimingSinks([this](uint64_t ns) { cost_.recordSubmit(ns); },
                               [this](uint64_t ns) { cost_.recordWake(ns); });
+        pool_->setTraceSink([this](const std::string& m) { if (trace_) trace(m); });
     }
     findOverlap(m.body);
 }
@@ -315,18 +324,26 @@ FutureP Interp::dispatch(const Def& d, Args args, Kwargs kw, int line) {
             fut->fail(DolphinError{"Cancelled", "", line});
             return;
         }
-        fut->ops = runAsTask([&] {
+        // Outcome first, then record the work, then complete the future: a
+        // caller joining it must find the operation count already there.
+        Value result;
+        std::unique_ptr<DolphinError> err;
+        uint64_t ops = runAsTask([&] {
             try {
-                fut->resolve(callFunction(*def, args, kw, line));
+                result = callFunction(*def, args, kw, line);
             } catch (const DolphinError& e) {
-                fut->fail(e);
+                err = std::make_unique<DolphinError>(e);
                 if (trace_) trace("seq " + std::to_string(fut->seq) + " (" + def->name + ") failed: " + e.cls + " " + e.msg);
             } catch (const DeferredFailure&) {   // can't happen: parallel-safe code has no barriers that defer
-                fut->fail(DolphinError{"RuntimeError", "internal: deferred failure escaped a task", line});
+                err = std::make_unique<DolphinError>(DolphinError{"RuntimeError", "internal: deferred failure escaped a task", line});
             } catch (const std::exception& e) {
-                fut->fail(DolphinError{"RuntimeError", std::string("internal: ") + e.what(), line});
+                err = std::make_unique<DolphinError>(DolphinError{"RuntimeError", std::string("internal: ") + e.what(), line});
             }
         });
+        fut->ops = ops;
+        pool_->noteOps(ops);
+        if (err) fut->fail(*err);
+        else fut->resolve(std::move(result));
     }, fut.get());
     if (!accepted) {
         inlineCalls_.fetch_add(1, std::memory_order_relaxed);
@@ -603,19 +620,23 @@ bool Interp::parallelComprehension(const ListComp& c, Frame& f, Value& out) {
             fut->fail(DolphinError{"Cancelled", "", line});
             return;
         }
-        fut->ops = runAsTask([&] {
+        std::unique_ptr<DolphinError> err;   // outcome first, then ops, then complete (see dispatch())
+        uint64_t ops = runAsTask([&] {
             try {
                 for (size_t i = lo; i < hi && !sh->abort.load(std::memory_order_relaxed); ++i)
                     sh->results[i] = callFunction(*d, sh->items[i].args, sh->items[i].kw, line);
-                fut->resolve(Value());
             } catch (const DolphinError& e) {
                 sh->abort.store(true, std::memory_order_relaxed);
-                fut->fail(e);
+                err = std::make_unique<DolphinError>(e);
             } catch (const std::exception& e) {
                 sh->abort.store(true, std::memory_order_relaxed);
-                fut->fail(DolphinError{"RuntimeError", std::string("internal: ") + e.what(), line});
+                err = std::make_unique<DolphinError>(DolphinError{"RuntimeError", std::string("internal: ") + e.what(), line});
             }
         });
+        fut->ops = ops;
+        if (pool_) pool_->noteOps(ops);
+        if (err) fut->fail(*err);
+        else fut->resolve(Value());
     };
 
     std::vector<FutureP> futs;
@@ -633,7 +654,7 @@ bool Interp::parallelComprehension(const ListComp& c, Frame& f, Value& out) {
     size_t remaining = n - start;
     // About kBatchesPerThread batches per thread evens out uneven items; each
     // must still be big enough to be worth its submit and wakeup (CostModel).
-    size_t maxBatches = static_cast<size_t>(threads()) * CostModel::kBatchesPerThread;
+    size_t maxBatches = static_cast<size_t>(activeThreads()) * CostModel::kBatchesPerThread;
     size_t byCost = static_cast<size_t>(static_cast<double>(remaining) * avg / cost_.minBatchNs());
     size_t batches = std::min({remaining, maxBatches, std::max<size_t>(byCost, 1)});
     size_t per = batches ? (remaining + batches - 1) / batches : 0;

@@ -30,10 +30,10 @@
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
-#include <string>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -103,18 +103,64 @@ struct PoolStats {
     std::atomic<uint64_t> refused{0};     ///< submit() calls refused because the queue was full (caller ran inline).
     std::atomic<uint64_t> byWorkers{0};   ///< Tasks run by pool workers.
     std::atomic<uint64_t> byHelpers{0};   ///< Tasks run by the thread waiting for them (still queued when it needed them).
+    // Adaptive worker count (ThreadPool::maybeControl()).
+    std::atomic<uint64_t> raises{0};      ///< Times a worker was added.
+    std::atomic<uint64_t> cuts{0};        ///< Times workers were parked because of contention.
+    std::atomic<uint64_t> reverted{0};    ///< Additions taken back because they didn't add throughput.
+    std::atomic<unsigned> activeMin{0};   ///< Fewest active workers seen.
+    std::atomic<unsigned> activeMax{0};   ///< Most active workers seen.
+    std::atomic<unsigned> contentionPermille{0};   ///< Last measured contention, in 1/1000.
 };
 
 /**
- * @brief Fixed-size pool of worker threads with one shared FIFO queue.
+ * @brief Pool of worker threads with one shared FIFO queue, and an optional
+ *        controller that adapts how many workers are active to the load.
  *
  * One queue and one mutex is deliberately simple. Per-thread deques with
  * work stealing can replace it if profiling shows queue contention.
+ *
+ * ### Adaptive worker count (PCODE.md §8a)
+ * All workers are created up front; the inactive ones are *parked* (asleep on
+ * their own condition variable, never given tasks). Every kControlMs a worker
+ * that has just finished a task runs one control step, using only figures
+ * gathered from running tasks (nothing is measured at startup):
+ *
+ * - **Contention:** share of the workers' runnable time spent waiting for a
+ *   CPU, from `/proc/thread-self/schedstat` (each worker reads its own every
+ *   kSampleMs). High contention means other programs want these cores.
+ * - **Throughput:** operations completed by tasks per second (noteOps()).
+ * - **Demand:** tasks queued, or submissions refused because the queue was full.
+ *
+ * The rule is AIMD, as TCP uses for congestion control, so many Dolphin
+ * programs sharing a machine settle into fair shares without coordinating:
+ * - contention > kCutAbove: park a quarter of the active workers;
+ * - contention < kRaiseBelow and demand: activate one more;
+ * - in between: hold (no flapping).
+ *
+ * Contention can't see hardware limits: a thread sharing a core with its SMT
+ * sibling, on an E-core, in a Bulldozer module or across a NUMA link counts as
+ * running, just slowly. So every addition is checked: if the next interval's
+ * throughput didn't rise by at least kKeepGain of an average worker's share,
+ * the addition is taken back and becomes a ceiling for kCeilingS seconds,
+ * then the pool tries again. One rule covers all those cases with no
+ * per-vendor knowledge.
  */
 class ThreadPool {
 public:
-    /// @param workers  Number of worker threads (0 = never run anything in parallel).
-    explicit ThreadPool(unsigned workers);
+    static constexpr int kControlMs = 100;        ///< Control step interval.
+    static constexpr int kSampleMs = 50;          ///< How often a worker reads its schedstat.
+    static constexpr double kCutAbove = 0.25;     ///< Contention above this parks workers.
+    static constexpr double kRaiseBelow = 0.10;   ///< Contention below this (with demand) adds one.
+    static constexpr double kKeepGain = 0.5;      ///< An added worker must add this share of an average worker's throughput.
+    static constexpr int kCeilingS = 10;          ///< Seconds a failed addition stays a ceiling.
+
+    /**
+     * @param workers      Worker threads to create (0 = never run anything in parallel).
+     * @param startActive  Workers active at first (clamped to 1..workers).
+     * @param adaptive     Adjust the active count to the load; false keeps all
+     *                     @p workers active (fixed `--threads N`).
+     */
+    explicit ThreadPool(unsigned workers, unsigned startActive = ~0u, bool adaptive = false);
     ~ThreadPool();   ///< Drains nothing: finishes running tasks, then joins.
 
     ThreadPool(const ThreadPool&) = delete;
@@ -137,6 +183,14 @@ public:
     void wait(Future& f);
 
     unsigned workers() const { return static_cast<unsigned>(threads_.size()); }
+    /// @brief Workers currently active (not parked).
+    unsigned active() const { return active_.load(std::memory_order_relaxed); }
+    /// @brief Is the active count adapting to load?
+    bool adaptive() const { return adaptive_; }
+    /// @brief Credit @p ops operations to completed work (throughput for the controller).
+    void noteOps(uint64_t ops) { opsDone_.fetch_add(ops, std::memory_order_relaxed); }
+    /// @brief Report each change of the active count (for `--trace`). Set before submitting anything.
+    void setTraceSink(std::function<void(const std::string&)> sink) { traceSink_ = std::move(sink); }
 
     /**
      * @brief Report pool timings (nanoseconds) for the cost model. Set before submitting anything.
@@ -152,9 +206,41 @@ public:
         wakeSink_ = std::move(wake);
     }
     PoolStats& stats() { return stats_; }
+    const PoolStats& stats() const { return stats_; }
 
 private:
-    void workerLoop();
+    void workerLoop(unsigned id);
+    /// @brief Worker @p id: if kSampleMs passed, read its schedstat and add the deltas to the totals.
+    void sampleSchedstat(unsigned id);
+    /// @brief Run one control step if kControlMs passed and no other thread is running one.
+    void maybeControl();
+    /// @brief Change the active count, waking or parking workers. @p why goes to the trace.
+    void setActive(unsigned n, const std::string& why);
+
+    /// Per-worker schedstat reading; each touched only by its own worker
+    /// (cache-line aligned so neighbours don't share a line).
+    struct alignas(64) WorkerSample {
+        uint64_t run = 0, wait = 0;   ///< Last cumulative values read.
+        std::chrono::steady_clock::time_point last{};
+        bool ok = true;               ///< False if schedstat can't be read here.
+    };
+    std::vector<WorkerSample> samples_;
+    std::atomic<uint64_t> runNs_{0}, waitNs_{0}, opsDone_{0};   ///< Running totals for the controller.
+    std::atomic<unsigned> active_{0};   ///< Active workers; written under m_.
+    bool adaptive_ = false;
+    std::condition_variable parkCv_;    ///< Parked workers sleep here.
+    std::function<void(const std::string&)> traceSink_;
+
+    // Controller state, guarded by controlM_ (taken with try_lock: one step at a time).
+    std::mutex controlM_;
+    std::atomic<int64_t> nextControlNs_{0};   ///< steady_clock ns of the next step (cheap pre-check).
+    std::chrono::steady_clock::time_point lastControl_{};
+    uint64_t lastRun_ = 0, lastWait_ = 0, lastOps_ = 0, lastRefused_ = 0;
+    bool evaluating_ = false;   ///< The last step added a worker; the next one checks it paid off.
+    unsigned evalFrom_ = 0;     ///< Active count before that addition.
+    double thrBefore_ = 0;      ///< Throughput (ops/s) before that addition.
+    unsigned ceiling_ = 0;      ///< Don't grow past this until ceilingUntil_ (0 = none).
+    std::chrono::steady_clock::time_point ceilingUntil_{};
 
     std::vector<std::thread> threads_;
     struct Task {
@@ -169,7 +255,6 @@ private:
     std::mutex m_;
     std::condition_variable cv_;
     bool stop_ = false;
-    size_t maxQueue_;   ///< Admission limit: beyond this depth, submit() refuses.
     PoolStats stats_;
 };
 

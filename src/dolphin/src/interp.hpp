@@ -47,6 +47,7 @@
 
 #include "ast.hpp"
 #include "costmodel.hpp"
+#include "topology.hpp"
 #include "runtime.hpp"
 #include "value.hpp"
 
@@ -109,8 +110,14 @@ public:
     PoolStats* stats() { return pool_ ? &pool_->stats() : nullptr; }
     /// @brief Calls run inline because the pool refused them or they weren't parallel-safe at that point.
     uint64_t inlineCalls() const { return inlineCalls_.load(); }
-    /// @brief Total threads in use (main + workers).
+    /// @brief Threads available (main + workers, active or parked).
     unsigned threads() const { return pool_ ? pool_->workers() + 1 : 1; }
+    /// @brief Threads currently active (main + active workers).
+    unsigned activeThreads() const { return pool_ ? pool_->active() + 1 : 1; }
+    /// @brief The pool, if any (for `--stats`).
+    const ThreadPool* pool() const { return pool_.get(); }
+    /// @brief Topology used for the automatic thread count (empty basis if a count was given).
+    const Topology& topology() const { return topo_; }
     /// @brief The cost model's current measurements (for `--stats`).
     const CostModel& costModel() const { return cost_; }
     /// @brief Use the old constant thresholds instead of measured ones (`--fixed-thresholds`).
@@ -313,6 +320,7 @@ private:
 
     /// Work, rate, submit-cost and wake-latency measurements behind every dispatch decision
     /// (costmodel.hpp). Tracks every parallel-safe function, registered at construction.
+    Topology topo_;   ///< Set when the thread count is automatic.
     CostModel cost_;
     /// @brief Is a single call to @p d expensive enough to be worth a thread?
     bool worthDispatching(const Def& d) const;
