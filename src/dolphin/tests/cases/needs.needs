@@ -1,8 +1,8 @@
-calls_logger	IO
-higher_order	IO,Database,Network,LocalOnly,Globals
-logs	IO
-ping	pure
-pong	pure
-pure_math	pure
-reads	IO
+calls_logger	IO	inline (has needs)
+higher_order	IO,Database,Network,LocalOnly,Globals	inline (has needs)
+logs	IO	inline (has needs)
+ping	pure	parallel
+pong	pure	parallel
+pure_math	pure	parallel
+reads	IO	inline (has needs)
 <module>	pure

@@ -13,7 +13,8 @@
  * undeclared needs would silently make the needs analysis wrong.
  *
  * ### Adding a method
- * Add the name to kMethods (that's what makes `obj.name` resolve), then
+ * Add it to the Method enum (ast.hpp) and kMethodNames (ast.cpp), and to the
+ * type's mask here (that's what makes `obj.name` resolve), then
  * implement it in Interp::callMethod(). All methods today are pure; the
  * analyzer relies on that (see analyzer.hpp).
  */
@@ -36,13 +37,25 @@ const std::unordered_map<std::string, unsigned>& builtinNeeds() {
         // pure: conversions and helpers
         {"len", NeedNone}, {"range", NeedNone}, {"str", NeedNone}, {"repr", NeedNone}, {"int", NeedNone},
         {"float", NeedNone}, {"bool", NeedNone}, {"abs", NeedNone}, {"min", NeedNone}, {"max", NeedNone},
-        {"sum", NeedNone}, {"ord", NeedNone}, {"chr", NeedNone}, {"type", NeedNone},
+        {"sum", NeedNone}, {"ord", NeedNone}, {"chr", NeedNone}, {"type", NeedNone}, {"sorted", NeedNone},
         // pure: binary decoding
         {"bits", NeedNone}, {"be_u8", NeedNone}, {"be_u16", NeedNone}, {"be_u32", NeedNone},
         {"be_u64", NeedNone}, {"be_i16sm", NeedNone}, {"be_i32sm", NeedNone}, {"be_f32", NeedNone},
         {"be_f64", NeedNone},
     };
     return table;
+}
+
+const std::vector<std::pair<std::string, std::string>>& builtinExceptions() {
+    static const std::vector<std::pair<std::string, std::string>> list = {
+        {"Error", ""},
+        {"ValueError", "Error"},        {"TypeError", "Error"},       {"IndexError", "Error"},
+        {"KeyError", "Error"},          {"NameError", "Error"},       {"UnboundLocalError", "NameError"},
+        {"AttributeError", "Error"},    {"ZeroDivisionError", "Error"}, {"OverflowError", "Error"},
+        {"IOError", "Error"},           {"DecodeError", "Error"},     {"RecursionError", "Error"},
+        {"RuntimeError", "Error"},      {"SyntaxError", "Error"},
+    };
+    return list;
 }
 
 void Interp::addBuiltin(const std::string& name, std::function<Value(Interp&, Args&, int)> fn) {
@@ -130,20 +143,18 @@ static bool parseInt(const std::string& s, int base, int64_t& out) {
 
 void Interp::installBuiltins() {
     // Exception hierarchy: everything derives from Error.
-    addException("Error", "");
-    for (const char* e : {"ValueError", "TypeError", "IndexError", "KeyError", "NameError", "AttributeError",
-                          "ZeroDivisionError", "OverflowError", "IOError", "DecodeError", "RecursionError",
-                          "RuntimeError", "SyntaxError"})
-        addException(e, "Error");
+    for (auto& [name, parent] : builtinExceptions()) addException(name, parent);
 
-    addBuiltin("print", [](Interp&, Args& a, int) {
+    // print() formats on the calling thread and hands the line to the printer
+    // thread (Interp::emit). It returns without waiting for the device.
+    addBuiltin("print", [](Interp& in, Args& a, int) {
         std::string out;
         for (size_t i = 0; i < a.size(); ++i) {
             if (i) out += ' ';
             out += toStr(a[i]);
         }
         out += '\n';
-        std::cout << out;
+        in.emit(std::move(out));
         return Value();
     });
 
@@ -163,6 +174,7 @@ void Interp::installBuiltins() {
         if (v.isStr()) return Value(static_cast<int64_t>(utf8Length(v.s())));
         if (v.isBytes()) return Value(static_cast<int64_t>(v.b().b.size()));
         if (v.isList()) return Value(static_cast<int64_t>(v.l().items.size()));
+        if (v.isDict()) return Value(static_cast<int64_t>(v.d().entries.size()));
         in.raise("TypeError", "object of type '" + typeName(v) + "' has no len()", line);
     });
 
@@ -287,6 +299,27 @@ void Interp::installBuiltins() {
         return acc;
     });
 
+    // sorted(iterable): new list in ascending order. Numbers or strings, not mixed.
+    // Stable, like Python's, so equal elements keep their relative order.
+    addBuiltin("sorted", [](Interp& in, Args& a, int line) {
+        arity(in, "sorted", a, 1, 1, line);
+        std::vector<Value> items;
+        if (a[0].isList()) items = a[0].l().items;
+        else if (a[0].isDict()) for (auto& [k, x] : a[0].d().entries) items.push_back(k);
+        else in.raise("TypeError", "sorted() needs a list or dict", line);
+        bool allNum = true, allStr = true;
+        for (auto& x : items) {
+            allNum = allNum && x.isNum();
+            allStr = allStr && x.isStr();
+        }
+        if (!allNum && !allStr) in.raise("TypeError", "sorted() needs all numbers or all strings", line);
+        std::stable_sort(items.begin(), items.end(), [&](const Value& x, const Value& y) {
+            if (allStr) return x.s().s < y.s().s;
+            return needNum(in, x, "sorted", line) < needNum(in, y, "sorted", line);
+        });
+        return Value::list(std::move(items));
+    });
+
     addBuiltin("ord", [](Interp& in, Args& a, int line) {
         arity(in, "ord", a, 1, 1, line);
         const std::string& s = needStr(in, a[0], "argument", line);
@@ -364,12 +397,25 @@ void Interp::installBuiltins() {
 
 /// Method names per type. attribute() consults this, so a misspelled method
 /// fails at the `.name` lookup with a clear AttributeError, not at the call.
-static const std::unordered_map<std::string, std::vector<std::string>> kMethods = {
-    {"str", {"upper", "lower", "strip", "lstrip", "rstrip", "split", "join", "startswith", "endswith", "find",
-             "replace", "count", "isdigit", "isalpha", "isspace", "encode"}},
-    {"bytes", {"decode", "find", "startswith", "endswith", "hex"}},
-    {"list", {"append", "pop", "extend", "index", "count"}},
-};
+/// @brief Which methods each type has (attribute lookup validates against this).
+static uint64_t methodMask(std::initializer_list<Method> ms) {
+    uint64_t m = 0;
+    for (Method x : ms) m |= uint64_t{1} << static_cast<unsigned>(x);
+    return m;
+}
+using M = Method;
+static const uint64_t kStrMethods = methodMask({M::upper, M::lower, M::strip, M::lstrip, M::rstrip, M::split, M::join,
+                                                M::startswith, M::endswith, M::find, M::replace, M::count, M::isdigit,
+                                                M::isalpha, M::isspace, M::encode});
+static const uint64_t kBytesMethods = methodMask({M::decode, M::find, M::startswith, M::endswith, M::hex});
+static const uint64_t kListMethods = methodMask({M::append, M::pop, M::extend, M::index, M::count});
+static const uint64_t kDictMethods = methodMask({M::get, M::keys, M::values, M::pop});
+
+bool Interp::hasMethod(const Value& obj, Method m) {
+    uint64_t mask = obj.isStr() ? kStrMethods : obj.isBytes() ? kBytesMethods : obj.isList() ? kListMethods
+                  : obj.isDict() ? kDictMethods : 0;
+    return m != Method::None && (mask >> static_cast<unsigned>(m) & 1);
+}
 
 Value Interp::attribute(const Value& obj, const std::string& name, int line) const {
     if (obj.is<std::shared_ptr<const ExcValue>>()) {
@@ -377,9 +423,8 @@ Value Interp::attribute(const Value& obj, const std::string& name, int line) con
         if (name == "message") return Value::str(e.msg);
         if (name == "kind") return Value::str(e.cls);
     }
-    auto it = kMethods.find(typeName(obj));
-    if (it != kMethods.end() && std::find(it->second.begin(), it->second.end(), name) != it->second.end())
-        return Value(std::make_shared<const BoundMethod>(BoundMethod{obj, name}));
+    Method m = methodByName(name);
+    if (hasMethod(obj, m)) return Value(std::make_shared<const BoundMethod>(BoundMethod{obj, m}));
     raise("AttributeError", "'" + typeName(obj) + "' has no attribute '" + name + "'", line);
 }
 
@@ -391,70 +436,80 @@ static std::string stripChars(const std::string& s, bool left, bool right, const
     return s.substr(a, b - a);
 }
 
-Value Interp::callMethod(const BoundMethod& m, Args& a, int line) {
-    const Value& self = m.self;
-    const std::string& n = m.name;
+Value Interp::callMethod(const Value& self, Method n, Args& a, int line) {
 
     if (self.isStr()) {
         const std::string& s = self.s().s;
-        if (n == "upper" || n == "lower") {
-            arity(*this, n.c_str(), a, 0, 0, line);
+        if (n == M::upper || n == M::lower) {
+            arity(*this, methodName(n), a, 0, 0, line);
             std::string o = s;   // ASCII case mapping only; full Unicode casing is a later stdlib item
-            for (auto& c : o) c = static_cast<char>(n == "upper" ? std::toupper(static_cast<unsigned char>(c))
+            for (auto& c : o) c = static_cast<char>(n == M::upper ? std::toupper(static_cast<unsigned char>(c))
                                                                  : std::tolower(static_cast<unsigned char>(c)));
-            return Value::str(o);
+            return Value::str(std::move(o));
         }
-        if (n == "strip" || n == "lstrip" || n == "rstrip") {
-            arity(*this, n.c_str(), a, 0, 1, line);
+        if (n == M::strip || n == M::lstrip || n == M::rstrip) {
+            arity(*this, methodName(n), a, 0, 1, line);
             std::string chars = a.empty() ? std::string(" \t\n\r\f\v") : needStr(*this, a[0], "chars", line);
-            return Value::str(stripChars(s, n != "rstrip", n != "lstrip", chars));
+            return Value::str(stripChars(s, n != M::rstrip, n != M::lstrip, chars));
         }
-        if (n == "split") {
+        if (n == M::split) {
             arity(*this, "split", a, 0, 1, line);
             std::vector<Value> out;
-            if (a.empty() || a[0].isNone()) {   // whitespace split, runs collapsed
-                std::istringstream ss(s);
-                std::string w;
-                while (ss >> w) out.push_back(Value::str(w));
+            // Direct scans, building each piece in place: a hot path in text
+            // decoding (a stringstream here cost a tenth of bulletin splitting).
+            if (a.empty() || a[0].isNone()) {   // whitespace split, runs collapsed (Python's whitespace set)
+                auto ws = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; };
+                size_t i = 0, len = s.size();
+                while (i < len) {
+                    while (i < len && ws(s[i])) ++i;
+                    size_t j = i;
+                    while (j < len && !ws(s[j])) ++j;
+                    if (j > i) out.push_back(Value::str(std::string(s, i, j - i)));
+                    i = j;
+                }
             } else {
                 const std::string& sep = needStr(*this, a[0], "separator", line);
                 if (sep.empty()) raise("ValueError", "empty separator", line);
                 size_t start = 0, pos;
                 while ((pos = s.find(sep, start)) != std::string::npos) {
-                    out.push_back(Value::str(s.substr(start, pos - start)));
+                    out.push_back(Value::str(std::string(s, start, pos - start)));
                     start = pos + sep.size();
                 }
-                out.push_back(Value::str(s.substr(start)));
+                out.push_back(Value::str(std::string(s, start)));
             }
             return Value::list(std::move(out));
         }
-        if (n == "join") {
+        if (n == M::join) {
             arity(*this, "join", a, 1, 1, line);
             if (!a[0].isList()) raise("TypeError", "join() needs a list of str", line);
+            auto& items = a[0].l().items;
+            size_t total = items.empty() ? 0 : s.size() * (items.size() - 1);
+            for (auto& x : items) total += needStr(*this, x, "join() item", line).size();
             std::string o;
+            o.reserve(total);
             bool first = true;
-            for (auto& x : a[0].l().items) {
+            for (auto& x : items) {
                 if (!first) o += s;
-                o += needStr(*this, x, "join() item", line);
+                o += x.s().s;
                 first = false;
             }
-            return Value::str(o);
+            return Value::str(std::move(o));
         }
-        if (n == "startswith" || n == "endswith") {
-            arity(*this, n.c_str(), a, 1, 1, line);
+        if (n == M::startswith || n == M::endswith) {
+            arity(*this, methodName(n), a, 1, 1, line);
             const std::string& p = needStr(*this, a[0], "prefix", line);
             if (p.size() > s.size()) return Value(false);
-            return Value(n == "startswith" ? s.compare(0, p.size(), p) == 0
+            return Value(n == M::startswith ? s.compare(0, p.size(), p) == 0
                                            : s.compare(s.size() - p.size(), p.size(), p) == 0);
         }
-        if (n == "find") {
+        if (n == M::find) {
             arity(*this, "find", a, 1, 1, line);
             size_t pos = s.find(needStr(*this, a[0], "substring", line));
             if (pos == std::string::npos) return Value(int64_t{-1});
             // convert byte offset to code point index
             return Value(static_cast<int64_t>(utf8Length(Str(s.substr(0, pos)))));
         }
-        if (n == "count") {
+        if (n == M::count) {
             arity(*this, "count", a, 1, 1, line);
             const std::string& sub = needStr(*this, a[0], "substring", line);
             if (sub.empty()) return Value(static_cast<int64_t>(utf8Length(self.s()) + 1));
@@ -462,7 +517,7 @@ Value Interp::callMethod(const BoundMethod& m, Args& a, int line) {
             for (size_t pos = s.find(sub); pos != std::string::npos; pos = s.find(sub, pos + sub.size())) ++c;
             return Value(c);
         }
-        if (n == "replace") {
+        if (n == M::replace) {
             arity(*this, "replace", a, 2, 2, line);
             const std::string& from = needStr(*this, a[0], "old", line);
             const std::string& to = needStr(*this, a[1], "new", line);
@@ -475,18 +530,18 @@ Value Interp::callMethod(const BoundMethod& m, Args& a, int line) {
                 start = pos + from.size();
             }
             o.append(s, start, std::string::npos);
-            return Value::str(o);
+            return Value::str(std::move(o));
         }
-        if (n == "isdigit" || n == "isalpha" || n == "isspace") {
-            arity(*this, n.c_str(), a, 0, 0, line);
+        if (n == M::isdigit || n == M::isalpha || n == M::isspace) {
+            arity(*this, methodName(n), a, 0, 0, line);
             if (s.empty()) return Value(false);
             for (unsigned char c : s) {
-                bool ok = n == "isdigit" ? std::isdigit(c) : n == "isalpha" ? std::isalpha(c) : std::isspace(c);
+                bool ok = n == M::isdigit ? std::isdigit(c) : n == M::isalpha ? std::isalpha(c) : std::isspace(c);
                 if (!ok) return Value(false);
             }
             return Value(true);
         }
-        if (n == "encode") {
+        if (n == M::encode) {
             arity(*this, "encode", a, 0, 0, line);
             return Value::bytes(s);   // UTF-8 only
         }
@@ -494,7 +549,7 @@ Value Interp::callMethod(const BoundMethod& m, Args& a, int line) {
 
     if (self.isBytes()) {
         const std::string& b = self.b().b;
-        if (n == "decode") {
+        if (n == M::decode) {
             arity(*this, "decode", a, 0, 0, line);
             // validate UTF-8
             for (size_t i = 0; i < b.size();) {
@@ -508,43 +563,44 @@ Value Interp::callMethod(const BoundMethod& m, Args& a, int line) {
             }
             return Value::str(b);
         }
-        if (n == "find") {
+        if (n == M::find) {
             arity(*this, "find", a, 1, 2, line);
             const std::string& sub = needBytes(*this, a[0], "needle", line);
             size_t start = a.size() == 2 ? static_cast<size_t>(std::max<int64_t>(0, needInt(*this, a[1], "start", line))) : 0;
             size_t pos = b.find(sub, start);
             return Value(pos == std::string::npos ? int64_t{-1} : static_cast<int64_t>(pos));
         }
-        if (n == "startswith" || n == "endswith") {
-            arity(*this, n.c_str(), a, 1, 1, line);
+        if (n == M::startswith || n == M::endswith) {
+            arity(*this, methodName(n), a, 1, 1, line);
             const std::string& p = needBytes(*this, a[0], "prefix", line);
             if (p.size() > b.size()) return Value(false);
-            return Value(n == "startswith" ? b.compare(0, p.size(), p) == 0
+            return Value(n == M::startswith ? b.compare(0, p.size(), p) == 0
                                            : b.compare(b.size() - p.size(), p.size(), p) == 0);
         }
-        if (n == "hex") {
+        if (n == M::hex) {
             arity(*this, "hex", a, 0, 0, line);
             static const char* d = "0123456789abcdef";
             std::string o;
             for (unsigned char c : b) { o += d[c >> 4]; o += d[c & 15]; }
-            return Value::str(o);
+            return Value::str(std::move(o));
         }
     }
 
     if (self.isList()) {
         auto& items = self.l().items;
-        if (n == "append") {
+        if (n == M::append || n == M::extend || n == M::pop) barrier();   // mutation: nothing in flight may read it
+        if (n == M::append) {
             arity(*this, "append", a, 1, 1, line);
             items.push_back(a[0]);
             return Value();
         }
-        if (n == "extend") {
+        if (n == M::extend) {
             arity(*this, "extend", a, 1, 1, line);
             auto more = iterate(a[0], line);
             items.insert(items.end(), more.begin(), more.end());
             return Value();
         }
-        if (n == "pop") {
+        if (n == M::pop) {
             arity(*this, "pop", a, 0, 1, line);
             if (items.empty()) raise("IndexError", "pop from empty list", line);
             int64_t i = a.empty() ? -1 : needInt(*this, a[0], "index", line);
@@ -554,13 +610,13 @@ Value Interp::callMethod(const BoundMethod& m, Args& a, int line) {
             items.erase(items.begin() + i);
             return v;
         }
-        if (n == "index") {
+        if (n == M::index) {
             arity(*this, "index", a, 1, 1, line);
             for (size_t i = 0; i < items.size(); ++i)
                 if (valuesEqual(items[i], a[0])) return Value(static_cast<int64_t>(i));
             raise("ValueError", "value is not in list", line);
         }
-        if (n == "count") {
+        if (n == M::count) {
             arity(*this, "count", a, 1, 1, line);
             int64_t c = 0;
             for (auto& x : items)
@@ -568,7 +624,33 @@ Value Interp::callMethod(const BoundMethod& m, Args& a, int line) {
             return Value(c);
         }
     }
-    raise("AttributeError", "'" + typeName(self) + "' has no method '" + n + "'", line);
+    if (self.isDict()) {
+        Dict& d = self.d();
+        if (n == M::keys || n == M::values) {   // lists (Python returns views; a copy is the safe M0 choice)
+            arity(*this, methodName(n), a, 0, 0, line);
+            std::vector<Value> out;
+            for (auto& [k, v] : d.entries) out.push_back(n == M::keys ? k : v);
+            return Value::list(std::move(out));
+        }
+        if (n == M::get || n == M::pop) {
+            arity(*this, methodName(n), a, 1, 2, line);
+            std::string ck;
+            if (!dictKey(a[0], ck)) raise("TypeError", "unhashable type: '" + typeName(a[0]) + "'", line);
+            long pos = d.find(ck);
+            if (pos < 0) {
+                if (a.size() == 2) return a[1];
+                if (n == M::get) return Value();
+                raise("KeyError", toRepr(a[0]), line);
+            }
+            Value v = d.entries[static_cast<size_t>(pos)].second;
+            if (n == M::pop) {
+                barrier();   // mutation
+                d.erase(static_cast<size_t>(pos));
+            }
+            return v;
+        }
+    }
+    raise("AttributeError", "'" + typeName(self) + "' has no method '" + std::string(methodName(n)) + "'", line);
 }
 
 // --------------------------------------------------------------- formatting

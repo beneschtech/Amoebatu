@@ -51,6 +51,26 @@ struct Bytes { std::string b; };
 /// @brief Mutable list of values.
 struct List { std::vector<Value> items; };
 
+/**
+ * @brief Mutable, insertion-ordered dictionary.
+ *
+ * Entries live in a vector, in insertion order, which is also the iteration
+ * order (as in Python 3.7+). @c index maps each key's canonical form (see
+ * dictKey()) to its position. Deleting an entry is O(n) because the index is
+ * rebuilt. Fine for M0; a tombstone scheme can replace it if profiling says so.
+ */
+struct Dict {
+    std::vector<std::pair<Value, Value>> entries;     ///< (key, value) in insertion order.
+    std::unordered_map<std::string, size_t> index;    ///< Canonical key → position in @c entries.
+
+    /// @brief Position of the entry with canonical key @p ck, or -1.
+    long find(const std::string& ck) const;
+    /// @brief Insert or overwrite. A new key goes at the end; an existing key keeps its position.
+    void set(const std::string& ck, const Value& key, const Value& value);
+    /// @brief Remove the entry at @p pos and rebuild the index.
+    void erase(size_t pos);
+};
+
 /// @brief A user-defined function: a pointer back into the AST.
 /// The Def is owned by the Module, which outlives the interpreter.
 struct Function { const Def* def; };
@@ -60,6 +80,7 @@ struct ExcClass { std::string name; std::string parent; };
 /// @brief An exception instance: class name plus message.
 struct ExcValue { std::string cls; std::string msg; };
 struct BoundMethod;
+struct Future;
 /// @brief Tag type for `None`.
 struct NoneT {};
 
@@ -78,9 +99,11 @@ struct Value {
     /// The underlying variant. Index order is not significant.
     using V = std::variant<NoneT, bool, int64_t, double,
                            std::shared_ptr<const Str>, std::shared_ptr<const Bytes>, std::shared_ptr<List>,
+                           std::shared_ptr<Dict>,
                            std::shared_ptr<const Function>, std::shared_ptr<const Builtin>,
                            std::shared_ptr<const ExcClass>, std::shared_ptr<const ExcValue>,
-                           std::shared_ptr<const BoundMethod>>;
+                           std::shared_ptr<const BoundMethod>,
+                           std::shared_ptr<Future>>;
     V v;  ///< Storage.
 
     Value() : v(NoneT{}) {}                                ///< None.
@@ -91,13 +114,27 @@ struct Value {
     /// Any immutable heap type, e.g. `std::make_shared<const Function>(...)`.
     template <class T> Value(std::shared_ptr<T> p) : v(std::shared_ptr<const T>(std::move(p))) {}
     Value(std::shared_ptr<List> p) : v(std::move(p)) {}    ///< list (mutable, shared).
+    Value(std::shared_ptr<Dict> p) : v(std::move(p)) {}    ///< dict (mutable, shared).
+    /// A call still running on another thread. Only ever stored in a variable,
+    /// and forced (waited for) when that variable is read; see Interp::eval().
+    Value(std::shared_ptr<Future> p) : v(std::move(p)) {}
 
     /// @brief Make a str value from UTF-8 bytes.
     static Value str(std::string s) { return Value(std::make_shared<const Str>(std::move(s))); }
+    /**
+     * @brief A str that refers to @p s without owning it or counting references.
+     *
+     * Copies are plain pointer copies (an aliasing shared_ptr with no control
+     * block), so threads sharing it never touch a common counter. @p s must
+     * outlive every copy: used for string literals, which the AST owns.
+     */
+    static Value borrowedStr(const Str* s) { return Value(std::shared_ptr<const Str>(std::shared_ptr<const Str>(), s)); }
     /// @brief Make a bytes value.
     static Value bytes(std::string b) { return Value(std::make_shared<const Bytes>(Bytes{std::move(b)})); }
     /// @brief Make a new list.
     static Value list(std::vector<Value> items = {}) { return Value(std::make_shared<List>(List{std::move(items)})); }
+    /// @brief Make a new empty dict.
+    static Value dict() { return Value(std::make_shared<Dict>()); }
 
     template <class T> bool is() const { return std::holds_alternative<T>(v); }  ///< Holds alternative T?
     template <class T> const T& as() const { return std::get<T>(v); }            ///< Get alternative T (throws std::bad_variant_access if wrong).
@@ -110,10 +147,13 @@ struct Value {
     bool isStr() const { return is<std::shared_ptr<const Str>>(); }
     bool isBytes() const { return is<std::shared_ptr<const Bytes>>(); }
     bool isList() const { return is<std::shared_ptr<List>>(); }
+    bool isDict() const { return is<std::shared_ptr<Dict>>(); }
+    bool isFuture() const { return is<std::shared_ptr<Future>>(); }
 
     const Str& s() const { return *as<std::shared_ptr<const Str>>(); }      ///< The str payload. Check isStr() first.
     const Bytes& b() const { return *as<std::shared_ptr<const Bytes>>(); }  ///< The bytes payload. Check isBytes() first.
     List& l() const { return *as<std::shared_ptr<List>>(); }                ///< The list payload (mutable). Check isList() first.
+    Dict& d() const { return *as<std::shared_ptr<Dict>>(); }                ///< The dict payload (mutable). Check isDict() first.
 };
 
 using Args = std::vector<Value>;                             ///< Positional call arguments.
@@ -136,7 +176,7 @@ struct Builtin {
 /// @brief A method looked up on a value, e.g. `s.split`, waiting to be called.
 struct BoundMethod {
     Value self;        ///< Receiver.
-    std::string name;  ///< Method name; validated when the attribute is read.
+    Method method;     ///< Which method; validated when the attribute is read.
 };
 
 /**
@@ -150,6 +190,10 @@ struct DolphinError {
     std::string cls;  ///< Exception class name, e.g. `ValueError`.
     std::string msg;  ///< Message; may be empty.
     int line;         ///< Source line where it was raised (0 if unknown).
+    /// When it "returned" (Future::tick()), for calls that failed on another
+    /// thread; 0 for errors raised right here. Decides which failure wins
+    /// (LANGUAGE.md decision 17: the first to return).
+    uint64_t at = 0;
 };
 
 /// @brief Dolphin type name of a value (`int`, `str`, …; an exception's class name).
@@ -160,8 +204,20 @@ bool truthy(const Value& v);
 std::string toStr(const Value& v);
 /// @brief `repr(x)`: like str() but quotes strings, matching CPython's quoting rules.
 std::string toRepr(const Value& v);
-/// @brief `==` semantics: numeric across int/float/bool, deep for lists, identity for functions.
+/// @brief `==` semantics: numeric across int/float/bool, deep for lists and dicts, identity for functions.
 bool valuesEqual(const Value& a, const Value& b);
+
+/**
+ * @brief Canonical hash-key form of a value, for dict lookup.
+ *
+ * Values that compare equal get the same key: `1`, `1.0` and `True` all map
+ * to the same entry, as in Python.
+ *
+ * @param v         The key value.
+ * @param[out] out  Canonical form.
+ * @return False if @p v is unhashable (list, dict): mutable values can't be keys.
+ */
+bool dictKey(const Value& v, std::string& out);
 
 /// @name UTF-8 helpers
 /// @{
