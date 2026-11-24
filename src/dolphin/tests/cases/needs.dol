@@ -1,0 +1,23 @@
+def pure_math(x: float) -> float:
+    return x * 2.0
+
+def logs(x: float):
+    print(x)
+
+def calls_logger(x: float) -> float:
+    logs(x)
+    return pure_math(x)
+
+def ping(n: int) -> int:
+    if n == 0:
+        return 0
+    return pong(n - 1)
+
+def pong(n: int) -> int:
+    return ping(n)
+
+def reads(path: str) -> bytes:
+    return read_file(path)
+
+def higher_order(f, x):
+    return f(x)

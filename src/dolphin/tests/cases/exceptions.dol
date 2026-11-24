@@ -1,0 +1,55 @@
+def check(x: int) -> int:
+    if x < 0:
+        raise ValueError(f"negative: {x}")
+    return x * 2
+
+def decode(n: int) -> int:
+    return check(n) + 1
+
+# Variables a failing call would assign keep their previous value (decision 2).
+result = -1
+try:
+    result = decode(5)
+    result = decode(-3)
+    print("not reached")
+except ValueError as e:
+    print("caught", e.kind, e.message, result)
+
+# Handler matching walks the hierarchy; everything derives from Error.
+for bad in [0, 1, 2, 3]:
+    try:
+        if bad == 0:
+            x = [1][5]
+        elif bad == 1:
+            x = 1 // 0
+        elif bad == 2:
+            x = undefined_name
+        else:
+            x = int("abc")
+    except IndexError:
+        print("index")
+    except ZeroDivisionError as e:
+        print("zero:", e.message)
+    except Error as e:
+        print("error:", e.kind)
+
+# Re-raise and nesting
+def inner():
+    try:
+        raise DecodeError("bad section 9")
+    except DecodeError:
+        print("inner saw it")
+        raise
+
+try:
+    inner()
+except Error as e:
+    print("outer saw", e.kind, e.message)
+
+try:
+    try:
+        raise IOError("disk")
+    except ValueError:
+        print("wrong handler")
+except IOError as e:
+    print("propagated past non-matching handler:", e.message)

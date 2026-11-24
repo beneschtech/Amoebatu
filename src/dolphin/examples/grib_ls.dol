@@ -1,0 +1,78 @@
+# grib_ls.dol: list the GRIB2 messages in a file and decode simple-packed fields.
+#
+#   dolphin examples/grib_ls.dol tests/data/synthetic.grib2
+#
+# This is the M0 target in Dolphin as it exists today. `layout`, `struct`,
+# `match`, `map` and futures arrive in later milestones, so sections are read
+# with the be_* builtins and plain functions for now.
+
+def split_messages(buf: bytes) -> list:
+    msgs = []
+    off = 0
+    while off < len(buf):
+        if buf[off:off + 4] != b"GRIB":
+            raise DecodeError(f"no GRIB marker at offset {off}")
+        if be_u8(buf, off + 7) != 2:
+            raise DecodeError(f"edition {be_u8(buf, off + 7)} at offset {off} is not GRIB2")
+        total = be_u64(buf, off + 8)
+        if buf[off + total - 4:off + total] != b"7777":
+            raise DecodeError(f"message at offset {off} has no 7777 trailer")
+        msgs.append(buf[off:off + total])
+        off += total
+    return msgs
+
+# Returns a 9-entry list indexed by section number (0 = section 0 itself).
+def walk_sections(msg: bytes) -> list:
+    secs = [None, None, None, None, None, None, None, None, None]
+    secs[0] = msg[0:16]
+    off = 16
+    while off < len(msg) - 4:
+        length = be_u32(msg, off)
+        num = be_u8(msg, off + 4)
+        if num < 1 or num > 7:
+            raise DecodeError(f"bad section number {num} at offset {off}")
+        secs[num] = msg[off:off + length]
+        off += length
+    return secs
+
+def param_name(discipline: int, category: int, number: int) -> str:
+    if discipline == 0 and category == 0 and number == 0:
+        return "TMP"
+    if discipline == 0 and category == 2 and number == 2:
+        return "UGRD"
+    if discipline == 0 and category == 2 and number == 3:
+        return "VGRD"
+    return f"var{discipline}_{category}_{number}"
+
+def unpack_simple(s5: bytes, s7: bytes) -> list:
+    if be_u16(s5, 9) != 0:
+        raise DecodeError(f"data representation template 5.{be_u16(s5, 9)} not supported yet")
+    n = be_u32(s5, 5)
+    r = be_f32(s5, 11)
+    e = 2.0 ** be_i16sm(s5, 15)
+    d = 10.0 ** -be_i16sm(s5, 17)
+    nbits = be_u8(s5, 19)
+    data = s7[5:]
+    return [(r + bits(data, i * nbits, nbits) * e) * d for i in range(n)]
+
+def describe(msg: bytes) -> str:
+    s = walk_sections(msg)
+    discipline = be_u8(s[0], 6)
+    center = be_u16(s[1], 5)
+    when = f"{be_u16(s[1], 12)}-{be_u8(s[1], 14):02d}-{be_u8(s[1], 15):02d} {be_u8(s[1], 16):02d}Z"
+    ni = be_u32(s[3], 30)
+    nj = be_u32(s[3], 34)
+    name = param_name(discipline, be_u8(s[4], 9), be_u8(s[4], 10))
+    fcst = be_u32(s[4], 18)
+    vals = unpack_simple(s[5], s[7])
+    return f"{name:<6} center={center:<3} {when} +{fcst}h  {ni}x{nj}  min={min(vals):7.1f} max={max(vals):7.1f}"
+
+def main(path: str):
+    msgs = split_messages(read_file(path))
+    # Becomes the parallel decode at M2: each describe() is a future.
+    lines = [describe(m) for m in msgs]
+    n = 1
+    for line in lines:
+        print(f"{n:>3}  {line}")
+        n += 1
+    print(f"{len(msgs)} messages")

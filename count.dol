@@ -1,0 +1,6 @@
+#
+# Count from 1 to 10
+#
+for i in range(0,10):
+  print("Let's help Harrys mom make a cake",i)
+

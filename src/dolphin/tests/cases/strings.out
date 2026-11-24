@@ -1,0 +1,15 @@
+['YTXX99', 'KWBC', '231200'] 3
+YTXX99-KWBC-231200 ytxx99 kwbc 231200
+True True 9
+5 ö röß e 7
+True 223 ß 🌪
+['a', 'b', '', 'c'] 1x2 ABC
+True True
+2 a+b+c True False
+"it's\n" 12! ababab
+['h', 'é', 'l', 'l', 'o']
+TMP   |   TMP|  TMP  |
+3.14    3.142 00042 2a 2A 101010 +42 -42
+1,234,567 25.0% 12,345.68 3.141590e+00
+{literal} 84 nested 2
+***ab***|  Größe|TM|

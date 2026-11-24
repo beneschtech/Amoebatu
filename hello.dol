@@ -1,0 +1,6 @@
+#
+# Hello World program in dolphin
+#
+def main():
+  print("Hello World\n")
+

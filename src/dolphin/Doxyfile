@@ -1,0 +1,26 @@
+# Doxygen configuration for Dolphin.
+#   cmake --build . --target dolphin_docs     (when Doxygen is installed)
+#   or: cd src/dolphin && doxygen              (output in src/dolphin/build-docs/html)
+# Only non-default settings are listed.
+
+PROJECT_NAME           = "Dolphin"
+PROJECT_BRIEF          = "The Amoebatu language: lexer, parser, needs analyzer, interpreter"
+OUTPUT_DIRECTORY       = build-docs
+INPUT                  = README.md ../../doc/LANGUAGE.md src
+FILE_PATTERNS          = *.hpp *.cpp *.md
+USE_MDFILE_AS_MAINPAGE = README.md
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+EXTRACT_ANON_NSPACES   = YES
+JAVADOC_AUTOBRIEF      = NO
+MARKDOWN_SUPPORT       = YES
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+HAVE_DOT               = NO
+WARN_IF_UNDOCUMENTED   = NO
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = NO
+QUIET                  = YES

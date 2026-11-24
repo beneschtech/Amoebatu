@@ -107,7 +107,7 @@ gossip, FastCGI API for peer list queries.
 global variable stratification, trust repository, web UI.
 
 This is early stage but architecturally serious. The design has been thought
-through carefully. See [DESIGN.md](docs/DESIGN.md) for the full specification.
+through carefully. See [DESIGN.md](doc/DESIGN.md) for the full specification.
 
 ---
 
@@ -177,8 +177,11 @@ src/
   lib/
     fastcgi/          # HTTP/FastCGI layer (webc-fcgi, hardened)
     jsonrpclib/       # JSON-RPC over UDP for inter-node messaging
-docs/
+  dolphin/            # The Dolphin language: lexer, parser, needs analyzer, interpreter
+doc/
   DESIGN.md           # Full architecture specification
+  PRIOR_ART.md        # What Amoeba got right, got wrong, and what's new here
+  LANGUAGE.md         # Dolphin language design
   papers/             # Tanenbaum's original Amoeba papers (the inspiration)
 ```
 
@@ -212,7 +215,7 @@ This project is looking for people who are interested in:
 If any of that sounds interesting, open an issue and say hello. Early stage
 means your ideas can actually shape the architecture.
 
-Please read [DESIGN.md](docs/DESIGN.md) before diving in — the design is
+Please read [DESIGN.md](doc/DESIGN.md) before diving in — the design is
 detailed enough that understanding it first will save everyone time.
 
 ---

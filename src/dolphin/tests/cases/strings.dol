@@ -1,0 +1,24 @@
+hdr = "  YTXX99 KWBC 231200  "
+parts = hdr.strip().split()
+print(parts, len(parts))
+print("-".join(parts), hdr.strip().lower())
+print("KWBC" in hdr, "KDEN" not in hdr, hdr.find("KWBC"))
+s = "Größe"
+print(len(s), s[2], s[1:4], s[-1], len(s.encode()))
+print(s.encode().decode() == s, ord("ß"), chr(223), chr(0x1F32A))
+print("a,b,,c".split(","), "x".join(["1", "2"]), "abc".upper())
+print("METAR KCOS".startswith("METAR"), "file.grib2".endswith(".grib2"))
+print("aaaa".count("aa"), "a-b-c".replace("-", "+"), "123".isdigit(), "12a".isdigit())
+print(repr("it's\n"), str(12) + "!", "ab" * 3)
+out = []
+for c in "héllo":
+    out.append(c)
+print(out)
+x = 3.14159
+n = 42
+name = "TMP"
+print(f"{name:<6}|{name:>6}|{name:^7}|")
+print(f"{x:.2f} {x:8.3f} {n:05d} {n:x} {n:X} {n:b} {n:+d} {-n:d}")
+print(f"{1234567:,} {0.25:.1%} {12345.678:,.2f} {x:e}")
+print(f"{{literal}} {n * 2} {'nested'} {[1, 2][1]}")
+print(f"{'ab':*^8}|{'Größe':>7}|{name:.2}|")

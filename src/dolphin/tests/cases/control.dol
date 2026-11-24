@@ -1,0 +1,38 @@
+def fib(n: int) -> int:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def scale(x: float, factor: float = 10.0, offset: float = 0.0) -> float:
+    return x * factor + offset
+
+print([fib(i) for i in range(15)])
+print(scale(2.0), scale(2.0, 3.0), scale(2.0, offset=1.0), scale(x=1.0, factor=2.0))
+print([x * x for x in range(10) if x % 3 == 0])
+
+total = 0
+i = 0
+while True:
+    i += 1
+    if i % 2 == 0:
+        continue
+    if i > 9:
+        break
+    total += i
+print(total)
+
+grid = [[0, 1], [2, 3]]
+grid[1][0] = 9
+print(grid, grid[1][-1], grid[0:1])
+xs = [3, 1, 2]
+xs.append(7)
+xs.extend([8])
+print(xs, xs.pop(), xs.index(2), xs.count(1), 2 in xs)
+b = b"GRIB\x00\x00\x00\x02"
+print(b[0], b[0:4], len(b), b[7], b.hex(), b.find(b"\x02"))
+for v in b[4:]:
+    print(v)
+
+if 1 > 2: print("no")
+elif 2 > 1: print("elif")
+else: print("else")

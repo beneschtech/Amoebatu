@@ -1,0 +1,8 @@
+calls_logger	IO
+higher_order	IO,Database,Network,LocalOnly,Globals
+logs	IO
+ping	pure
+pong	pure
+pure_math	pure
+reads	IO
+<module>	pure
