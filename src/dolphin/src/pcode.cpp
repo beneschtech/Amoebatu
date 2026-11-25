@@ -27,7 +27,7 @@ const char* opName(OpCode op) {
         "NEWLIST", "APPEND", "NEWDICT", "DICTSET", "INDEX", "INDEXK", "SLICE", "SETINDEX", "ATTR",
         "FORMAT", "CONCAT", "CALL", "RETURN", "RETURNNIL", "RAISE", "RERAISE", "EXCMATCH", "EXCBIND",
         "HPUSH", "HPOP", "RETHROW", "SETTLE", "SPAWN", "FORCE", "JMPNOPOOL", "PMAP",
-        "JEQ", "JNE", "JLT", "JLE", "JGT", "JGE", "JIN", "JNOTIN"};
+        "JEQ", "JNE", "JLT", "JLE", "JGT", "JGE", "JIN", "JNOTIN", "SETG"};
     return k[static_cast<size_t>(op)];
 }
 
@@ -54,6 +54,17 @@ public:
         findSpawns(d_.body);
         block(d_.body);
         emit(ins::abc(OpCode::RETURNNIL, 0));   // falling off the end returns None
+        p_.regNames.resize(p_.nregs);
+    }
+
+    /// Compile module top-level statements @p body (d_ is the `<module>` stand-in).
+    void runModule(const Block& body) {
+        module_ = true;
+        p_.def = &d_;
+        p_.regNames.assign(256, "");
+        line_ = 1;
+        block(body);
+        emit(ins::abc(OpCode::RETURNNIL, 0));
         p_.regNames.resize(p_.nregs);
     }
 
@@ -84,6 +95,11 @@ private:
         return Known{a.set & b.set, true};
     }
     void mark(unsigned slot) { known_.set.set(slot); }
+
+    bool module_ = false;   ///< Compiling module top-level code (runModule()).
+
+    /// Hoisted loop invariants (--opt 1): expression → register computed before the loop.
+    std::unordered_map<const Expr*, unsigned> hoisted_;
     PCode& p_;
     unsigned top_ = 0;     ///< Next free temporary register.
     unsigned iterDepth_ = 0;
@@ -209,7 +225,7 @@ private:
     }
     /// Is @p s a statement the tree-walker would try to dispatch? Returns the callee.
     const Def* spawnable(const Stmt& s) const {
-        if (!hooks_.overlap || !hooks_.overlap(s)) return nullptr;
+        if (module_ || !hooks_.overlap || !hooks_.overlap(s)) return nullptr;   // module code never dispatches
         if (s.k == Stmt::K::Assign) {
             auto& a = static_cast<const Assign&>(s);
             if (a.target->k != Expr::K::Name || static_cast<const Name&>(*a.target).bind != Bind::Local) return nullptr;
@@ -244,6 +260,7 @@ private:
     /// Evaluate @p e and return the register holding it. A local is used in
     /// place (no copy); anything else goes into a new temporary.
     unsigned operand(const Expr& e) {
+        if (auto h = hoisted_.find(&e); h != hoisted_.end()) return h->second;   // computed before the loop
         if (e.k == Expr::K::Name) {
             auto& n = static_cast<const Name&>(e);
             if (n.bind == Bind::Local) {
@@ -272,6 +289,10 @@ private:
     /// Evaluate @p e into register @p dst.
     void into(const Expr& e, unsigned dst) {
         line_ = e.line;
+        if (auto h = hoisted_.find(&e); h != hoisted_.end()) {
+            emit(ins::abc(OpCode::MOVE, dst, h->second));
+            return;
+        }
         switch (e.k) {
         case Expr::K::Int: emit(ins::abx(OpCode::LOADK, dst, konst(Value(static_cast<const IntLit&>(e).v)))); return;
         case Expr::K::Float: emit(ins::abx(OpCode::LOADK, dst, konst(Value(static_cast<const FloatLit&>(e).v)))); return;
@@ -474,6 +495,7 @@ private:
 
     /// Could the tree-walker run this comprehension as a parallel map? (Interp::parallelComprehension's static tests.)
     const Def* mapTarget(const ListComp& c) const {
+        if (module_) return nullptr;   // module code never dispatches
         const Def* d = spawnTarget(*c.elt);
         if (!d || !hooks_.reorderable) return nullptr;
         auto& call = static_cast<const Call&>(*c.elt);
@@ -536,11 +558,14 @@ private:
             line_ = c.line;
             emit(ins::abc(OpCode::ITER, slot, it));
             emit(ins::abc(OpCode::NEWLIST, dst, 0, 0));
-            if (c.slot < 0) throw CannotCompile{};
+            if (c.slot < 0 && !module_) throw CannotCompile{};
+            // Module code: the variable is a global (the tree-walker writes it there too).
+            unsigned var = c.slot >= 0 ? static_cast<unsigned>(c.slot) : temp();
             size_t loop = here();
-            emit(ins::abc(OpCode::FORNEXT, static_cast<unsigned>(c.slot), slot));
+            emit(ins::abc(OpCode::FORNEXT, var, slot));
             size_t exit = jump(OpCode::JMP);
-            mark(static_cast<unsigned>(c.slot));
+            if (c.slot >= 0) mark(var);
+            else setGlobal(c.var, var);
             if (c.cond) {
                 std::vector<size_t> skip;
                 condJump(*c.cond, false, skip);
@@ -683,8 +708,297 @@ private:
         throw CannotCompile{};
     }
 
+    // ------------------------------------------------- loop-invariant hoisting
+    //
+    // Deliberately narrow (correctness over coverage). From a `while` condition
+    // that is one comparison, hoist the operand that is evaluated second when
+    // the first is a constant or an assigned, non-future local (so evaluating
+    // it earlier changes neither effects nor which error comes first), and only
+    // if it is invariant:
+    //  - built from constants, globals, and locals the loop never assigns;
+    //  - arithmetic and unary operators;
+    //  - len(local), where the local's length can't change in the loop: it is a
+    //    parameter annotated bytes or str (immutable), or the loop contains no
+    //    mutation at all (no item assignment, no append/extend/pop, no call to
+    //    a function that may mutate its arguments or something else, no call
+    //    through a value).
+    // At least one call or operator must be involved, or there is nothing to save.
+
+    /// Slots assigned anywhere in @p b (including comprehension and except-as variables).
+    void assignedIn(const Block& b, std::bitset<256>& out) const {
+        for (auto& st : b) {
+            switch (st->k) {
+            case Stmt::K::Assign: {
+                auto& a = static_cast<const Assign&>(*st);
+                if (a.target->k == Expr::K::Name && static_cast<const Name&>(*a.target).slot >= 0)
+                    out.set(static_cast<size_t>(static_cast<const Name&>(*a.target).slot));
+                exprSlots(*a.value, out);
+                break;
+            }
+            case Stmt::K::AugAssign: {
+                auto& a = static_cast<const AugAssign&>(*st);
+                if (a.target->k == Expr::K::Name && static_cast<const Name&>(*a.target).slot >= 0)
+                    out.set(static_cast<size_t>(static_cast<const Name&>(*a.target).slot));
+                exprSlots(*a.value, out);
+                break;
+            }
+            case Stmt::K::Expr: exprSlots(*static_cast<const ExprStmt&>(*st).e, out); break;
+            case Stmt::K::If:
+                for (auto& [c, body] : static_cast<const If&>(*st).branches) {
+                    exprSlots(*c, out);
+                    assignedIn(body, out);
+                }
+                assignedIn(static_cast<const If&>(*st).orelse, out);
+                break;
+            case Stmt::K::While:
+                exprSlots(*static_cast<const While&>(*st).cond, out);
+                assignedIn(static_cast<const While&>(*st).body, out);
+                break;
+            case Stmt::K::For: {
+                auto& f = static_cast<const For&>(*st);
+                if (f.slot >= 0) out.set(static_cast<size_t>(f.slot));
+                exprSlots(*f.iter, out);
+                assignedIn(f.body, out);
+                break;
+            }
+            case Stmt::K::Try:
+                assignedIn(static_cast<const Try&>(*st).body, out);
+                for (auto& h : static_cast<const Try&>(*st).handlers) {
+                    if (h.asSlot >= 0) out.set(static_cast<size_t>(h.asSlot));
+                    assignedIn(h.body, out);
+                }
+                break;
+            case Stmt::K::Def:
+                if (static_cast<const Def&>(*st).slot >= 0) out.set(static_cast<size_t>(static_cast<const Def&>(*st).slot));
+                break;
+            case Stmt::K::Return:
+                if (static_cast<const Return&>(*st).value) exprSlots(*static_cast<const Return&>(*st).value, out);
+                break;
+            case Stmt::K::Raise:
+                if (static_cast<const Raise&>(*st).value) exprSlots(*static_cast<const Raise&>(*st).value, out);
+                break;
+            default: break;
+            }
+        }
+    }
+    /// Comprehension variables assigned inside an expression.
+    static void exprSlots(const Expr& e, std::bitset<256>& out) {
+        forEachExpr(e, [&](const Expr& x) {
+            if (x.k == Expr::K::ListComp && static_cast<const ListComp&>(x).slot >= 0)
+                out.set(static_cast<size_t>(static_cast<const ListComp&>(x).slot));
+        });
+    }
+    /// Visit @p e and every subexpression.
+    template <class F> static void forEachExpr(const Expr& e, const F& f) {
+        f(e);
+        switch (e.k) {
+        case Expr::K::FStr:
+            for (auto& p : static_cast<const FStr&>(e).parts)
+                if (p.expr) forEachExpr(*p.expr, f);
+            break;
+        case Expr::K::Unary: forEachExpr(*static_cast<const Unary&>(e).operand, f); break;
+        case Expr::K::Binary:
+            forEachExpr(*static_cast<const Binary&>(e).lhs, f);
+            forEachExpr(*static_cast<const Binary&>(e).rhs, f);
+            break;
+        case Expr::K::BoolOp:
+            forEachExpr(*static_cast<const BoolOp&>(e).lhs, f);
+            forEachExpr(*static_cast<const BoolOp&>(e).rhs, f);
+            break;
+        case Expr::K::Compare:
+            forEachExpr(*static_cast<const Compare&>(e).first, f);
+            for (auto& [op, r] : static_cast<const Compare&>(e).rest) forEachExpr(*r, f);
+            break;
+        case Expr::K::Call: {
+            auto& c = static_cast<const Call&>(e);
+            forEachExpr(*c.fn, f);
+            for (auto& a : c.args) forEachExpr(*a, f);
+            for (auto& [k, v] : c.kwargs) forEachExpr(*v, f);
+            break;
+        }
+        case Expr::K::Index:
+            forEachExpr(*static_cast<const Index&>(e).obj, f);
+            forEachExpr(*static_cast<const Index&>(e).index, f);
+            break;
+        case Expr::K::Slice: {
+            auto& s = static_cast<const Slice&>(e);
+            if (s.lo) forEachExpr(*s.lo, f);
+            if (s.hi) forEachExpr(*s.hi, f);
+            break;
+        }
+        case Expr::K::Attr: forEachExpr(*static_cast<const Attr&>(e).obj, f); break;
+        case Expr::K::List:
+            for (auto& x : static_cast<const ListLit&>(e).elems) forEachExpr(*x, f);
+            break;
+        case Expr::K::Dict:
+            for (auto& [k, v] : static_cast<const DictLit&>(e).items) {
+                forEachExpr(*k, f);
+                forEachExpr(*v, f);
+            }
+            break;
+        case Expr::K::ListComp: {
+            auto& c = static_cast<const ListComp&>(e);
+            forEachExpr(*c.iter, f);
+            if (c.cond) forEachExpr(*c.cond, f);
+            forEachExpr(*c.elt, f);
+            break;
+        }
+        default: break;
+        }
+    }
+
+    /// Could anything in @p b mutate a list or dict (any of them: aliasing isn't analyzed)?
+    static bool mayMutate(const Block& b) {
+        bool m = false;
+        auto exprMutates = [&](const Expr& e) {
+            forEachExpr(e, [&](const Expr& x) {
+                if (x.k != Expr::K::Call) return;
+                auto& c = static_cast<const Call&>(x);
+                if (c.fn->k == Expr::K::Attr) {
+                    Method mt = static_cast<const Attr&>(*c.fn).method;
+                    if (mt == Method::append || mt == Method::extend || mt == Method::pop || mt == Method::None) m = true;
+                } else if (c.fn->k == Expr::K::Name) {
+                    auto& n = static_cast<const Name&>(*c.fn);
+                    if (n.bind == Bind::Builtin || n.bind == Bind::Exception) return;   // builtins don't mutate their arguments
+                    if (!n.def || n.def->mutatesArgs || n.def->mutatesOther) m = true;
+                } else {
+                    m = true;   // call through a computed value: unknown
+                }
+            });
+        };
+        for (auto& st : b) {
+            switch (st->k) {
+            case Stmt::K::Assign: {
+                auto& a = static_cast<const Assign&>(*st);
+                if (a.target->k != Expr::K::Name) m = true;
+                exprMutates(*a.value);
+                break;
+            }
+            case Stmt::K::AugAssign: {
+                auto& a = static_cast<const AugAssign&>(*st);
+                if (a.target->k != Expr::K::Name) m = true;
+                exprMutates(*a.value);
+                break;
+            }
+            case Stmt::K::Expr: exprMutates(*static_cast<const ExprStmt&>(*st).e); break;
+            case Stmt::K::If:
+                for (auto& [c, body] : static_cast<const If&>(*st).branches) {
+                    exprMutates(*c);
+                    m = m || mayMutate(body);
+                }
+                m = m || mayMutate(static_cast<const If&>(*st).orelse);
+                break;
+            case Stmt::K::While:
+                exprMutates(*static_cast<const While&>(*st).cond);
+                m = m || mayMutate(static_cast<const While&>(*st).body);
+                break;
+            case Stmt::K::For:
+                exprMutates(*static_cast<const For&>(*st).iter);
+                m = m || mayMutate(static_cast<const For&>(*st).body);
+                break;
+            case Stmt::K::Try:
+                m = m || mayMutate(static_cast<const Try&>(*st).body);
+                for (auto& h : static_cast<const Try&>(*st).handlers) m = m || mayMutate(h.body);
+                break;
+            case Stmt::K::Return:
+                if (static_cast<const Return&>(*st).value) exprMutates(*static_cast<const Return&>(*st).value);
+                break;
+            case Stmt::K::Raise:
+                if (static_cast<const Raise&>(*st).value) exprMutates(*static_cast<const Raise&>(*st).value);
+                break;
+            default: break;
+            }
+            if (m) return true;
+        }
+        return m;
+    }
+
+    /// Is local @p slot a parameter annotated with an immutable type (bytes, str)?
+    bool immutableParam(int slot) const {
+        if (slot < 0 || static_cast<size_t>(slot) >= d_.params.size()) return false;
+        const Expr* an = d_.params[static_cast<size_t>(slot)].annot.get();
+        if (!an || an->k != Expr::K::Name) return false;
+        const std::string& t = static_cast<const Name&>(*an).id;
+        return t == "bytes" || t == "str";
+    }
+
+    /// Is @p e invariant in a loop that assigns @p assigned and (if @p mutates) may mutate containers?
+    bool invariant(const Expr& e, const std::bitset<256>& assigned, bool mutates, bool& computes) const {
+        switch (e.k) {
+        case Expr::K::Int: case Expr::K::Float: case Expr::K::Str: case Expr::K::Bytes: case Expr::K::Bool:
+        case Expr::K::None:
+            return true;
+        case Expr::K::Name: {
+            auto& n = static_cast<const Name&>(e);
+            if (n.bind == Bind::Local) {
+                if (n.slot < 0) return false;
+                size_t sl = static_cast<size_t>(n.slot);
+                return !assigned.test(sl) && known_.set.test(sl) && !mayBeFuture_[sl];
+            }
+            return n.bind == Bind::Global || n.bind == Bind::Function || n.bind == Bind::Builtin;
+        }
+        case Expr::K::Unary: {
+            computes = true;
+            return invariant(*static_cast<const Unary&>(e).operand, assigned, mutates, computes);
+        }
+        case Expr::K::Binary: {
+            computes = true;
+            auto& b = static_cast<const Binary&>(e);
+            return invariant(*b.lhs, assigned, mutates, computes) && invariant(*b.rhs, assigned, mutates, computes);
+        }
+        case Expr::K::Call: {
+            auto& c = static_cast<const Call&>(e);
+            if (c.fn->k != Expr::K::Name || static_cast<const Name&>(*c.fn).bind != Bind::Builtin ||
+                static_cast<const Name&>(*c.fn).id != "len" || c.args.size() != 1 || !c.kwargs.empty())
+                return false;
+            const Expr& arg = *c.args[0];
+            if (arg.k != Expr::K::Name || static_cast<const Name&>(arg).bind != Bind::Local) return false;
+            int sl = static_cast<const Name&>(arg).slot;
+            if (mutates && !immutableParam(sl)) return false;   // its length could change
+            computes = true;
+            return invariant(arg, assigned, mutates, computes);
+        }
+        default: return false;
+        }
+    }
+
+    /// Is @p e safe to evaluate first (a constant or an assigned, non-future local)?
+    bool safeFirst(const Expr& e) const {
+        switch (e.k) {
+        case Expr::K::Int: case Expr::K::Float: case Expr::K::Str: case Expr::K::Bytes: case Expr::K::Bool:
+        case Expr::K::None:
+            return true;
+        case Expr::K::Name: {
+            auto& n = static_cast<const Name&>(e);
+            return n.bind == Bind::Local && n.slot >= 0 && known_.set.test(static_cast<size_t>(n.slot)) &&
+                   !mayBeFuture_[static_cast<size_t>(n.slot)];
+        }
+        default: return false;
+        }
+    }
+
+    /// The operand of @p w's condition to compute before the loop, or null.
+    const Expr* hoistable(const While& w) const {
+        if (!hooks_.optimize || w.cond->k != Expr::K::Compare) return nullptr;
+        auto& c = static_cast<const Compare&>(*w.cond);
+        if (c.rest.size() != 1) return nullptr;
+        const Expr& lhs = *c.first;
+        const Expr& rhs = *c.rest[0].second;
+        std::bitset<256> assigned;
+        assignedIn(w.body, assigned);
+        bool mutates = mayMutate(w.body);
+        bool computes = false;
+        if (safeFirst(lhs) && invariant(rhs, assigned, mutates, computes) && computes) return &rhs;
+        computes = false;
+        // The left operand is evaluated first anyway: hoisting it changes nothing
+        // about order, provided it's invariant.
+        if (invariant(lhs, assigned, mutates, computes) && computes) return &lhs;
+        return nullptr;
+    }
+
     void stmt(const Stmt& s) {
-        unsigned savedTop = top_;
+        const unsigned entryTop = top_;
+        unsigned savedTop = top_;   // a while loop raises this to keep a hoisted register reserved
         line_ = s.line;
         switch (s.k) {
         case Stmt::K::Expr: {
@@ -710,6 +1024,16 @@ private:
             auto& a = static_cast<const AugAssign&>(s);
             if (a.target->k == Expr::K::Name) {
                 auto& n = static_cast<const Name&>(*a.target);
+                if (module_ && n.bind == Bind::Global) {   // read, compute, write back
+                    unsigned cur = temp();
+                    line_ = s.line;
+                    emit(ins::abx(OpCode::GETG, cur, name(n.id)));
+                    unsigned r = operand(*a.value);
+                    line_ = s.line;
+                    emit(ins::abc(binOp(a.code), cur, cur, r));
+                    setGlobal(n.id, cur);
+                    break;
+                }
                 if (n.bind != Bind::Local) throw CannotCompile{};
                 unsigned slot = local(n.slot);   // unassigned: UnboundLocalError before the value is evaluated
                 unsigned r = operand(*a.value);
@@ -756,6 +1080,14 @@ private:
 
         case Stmt::K::While: {
             auto& w = static_cast<const While&>(s);
+            // Loop-invariant part of the condition: computed once, before the loop.
+            const Expr* inv = hoistable(w);
+            if (inv) {
+                unsigned hr = temp();
+                into(*inv, hr);
+                hoisted_[inv] = hr;
+                savedTop = top_;   // keep hr reserved for the whole loop
+            }
             size_t loop = here();
             std::vector<size_t> exits;
             condJump(*w.cond, false, exits);
@@ -770,23 +1102,31 @@ private:
             for (size_t j : exits) patch(j, here());
             for (size_t j : r.breaks) patch(j, here());
             for (size_t j : r.continues) patch(j, loop);
+            if (inv) hoisted_.erase(inv);
             break;
         }
 
         case Stmt::K::For: {
             auto& f = static_cast<const For&>(s);
-            if (f.slot < 0) throw CannotCompile{};
+            if (f.slot < 0 && !module_) throw CannotCompile{};
             unsigned it = operand(*f.iter);
+            // Module code: the loop variable is a global, written through a register.
+            unsigned var = f.slot >= 0 ? static_cast<unsigned>(f.slot) : 0;
+            if (f.slot < 0) {
+                var = temp();
+                savedTop = top_;
+            }
             unsigned slot = iterDepth_++;
             p_.niters = std::max(p_.niters, iterDepth_);
             line_ = s.line;
             emit(ins::abc(OpCode::ITER, slot, it));
             top_ = savedTop;
             size_t loop = here();
-            emit(ins::abc(OpCode::FORNEXT, static_cast<unsigned>(f.slot), slot));
+            emit(ins::abc(OpCode::FORNEXT, var, slot));
             size_t exit = jump(OpCode::JMP);
             Known afterIter = known_;   // the exit state: the body may never run
-            mark(static_cast<unsigned>(f.slot));
+            if (f.slot >= 0) mark(var);
+            else setGlobal(f.var, var);
             regions_.push_back(Region{Region::K::Loop, loop, {}, {}});
             block(f.body);
             known_ = afterIter;
@@ -802,9 +1142,15 @@ private:
 
         case Stmt::K::Def: {
             auto& nd = static_cast<const Def&>(s);
-            if (nd.slot < 0) throw CannotCompile{};
-            emit(ins::abx(OpCode::LOADK, static_cast<unsigned>(nd.slot),
-                          konst(Value(std::make_shared<const Function>(Function{&nd})))));
+            Value fn(std::make_shared<const Function>(Function{&nd}));
+            if (nd.slot < 0) {
+                if (!module_) throw CannotCompile{};
+                unsigned t = temp();
+                emit(ins::abx(OpCode::LOADK, t, konst(std::move(fn))));
+                setGlobal(nd.name, t);
+                break;
+            }
+            emit(ins::abx(OpCode::LOADK, static_cast<unsigned>(nd.slot), konst(std::move(fn))));
             mark(static_cast<unsigned>(nd.slot));
             break;
         }
@@ -853,12 +1199,16 @@ private:
             break;
         }
         }
-        top_ = savedTop;
+        top_ = entryTop;
     }
 
     void assign(const Expr& target, const Expr& value) {
         if (target.k == Expr::K::Name) {
             auto& n = static_cast<const Name&>(target);
+            if (module_ && n.bind == Bind::Global) {
+                setGlobal(n.id, operand(value));
+                return;
+            }
             if (n.bind != Bind::Local || n.slot < 0) throw CannotCompile{};
             unsigned slot = static_cast<unsigned>(n.slot);
             if (safeInto(value)) {
@@ -878,6 +1228,12 @@ private:
             return;
         }
         throw CannotCompile{};   // attribute assignment: tree-walker raises the AttributeError
+    }
+
+    /// Module code: global @p id = register @p r.
+    void setGlobal(const std::string& id, unsigned r) {
+        if (!module_) throw CannotCompile{};
+        emit(ins::abx(OpCode::SETG, r, name(id)));
     }
 
     void storeIndex(const Index& ix, unsigned v) {
@@ -912,9 +1268,14 @@ private:
             }
             known_ = atEntry;
             if (!h.as.empty()) {
-                if (h.asSlot < 0) throw CannotCompile{};
-                emit(ins::abc(OpCode::EXCBIND, static_cast<unsigned>(h.asSlot)));
-                mark(static_cast<unsigned>(h.asSlot));
+                if (h.asSlot >= 0) {
+                    emit(ins::abc(OpCode::EXCBIND, static_cast<unsigned>(h.asSlot)));
+                    mark(static_cast<unsigned>(h.asSlot));
+                } else {
+                    unsigned t = temp();
+                    emit(ins::abc(OpCode::EXCBIND, t));
+                    setGlobal(h.as, t);
+                }
             }
             emit(ins::abc(OpCode::HPUSH, 0));
             size_t bodyStart = here();
@@ -951,6 +1312,20 @@ std::unique_ptr<PCode> compileFunction(const Def& d, const CompileHooks& hooks) 
     return p;
 }
 
+std::unique_ptr<PCode> compileModule(const Module& m, const Def& self, const CompileHooks& hooks) {
+    auto p = std::make_unique<PCode>();
+    try {
+        Compiler(self, hooks, *p).runModule(m.body);
+    } catch (const CannotCompile&) {
+        return nullptr;
+    }
+    p->globalCache = std::make_unique<std::atomic<const Value*>[]>(p->names.size());
+    for (size_t i = 0; i < p->names.size(); ++i) p->globalCache[i].store(nullptr);
+    p->calleeBound = std::make_unique<std::atomic<bool>[]>(p->calls.size());
+    for (size_t i = 0; i < p->calls.size(); ++i) p->calleeBound[i].store(false);
+    return p;
+}
+
 std::string disassemble(const PCode& p) {
     std::ostringstream o;
     o << p.def->name << "  params " << p.nparams << "  regs " << p.nregs << "  iters " << p.niters << "  consts "
@@ -971,6 +1346,7 @@ std::string disassemble(const PCode& p) {
         switch (op) {
         case OpCode::LOADK: o << reg(a) << " K" << bx << " " << toRepr(p.consts[bx]); break;
         case OpCode::GETG: case OpCode::ATTR: o << reg(a) << " " << p.names[bx]; break;
+        case OpCode::SETG: o << p.names[bx] << " = " << reg(a); break;
         case OpCode::FORMAT: o << reg(a) << " '" << p.names[bx] << "'"; break;
         case OpCode::INDEXK: o << reg(a) << " [" << toRepr(p.consts[bx]) << "]"; break;
         case OpCode::EXCMATCH: o << p.names[bx]; break;

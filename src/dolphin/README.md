@@ -11,7 +11,7 @@ A tree-walking interpreter that defines the language's semantics, now able to
 run independent calls on local threads. `--threads 1` is the sequential
 reference; any other thread count must produce byte-identical output, and
 the test suite checks that at 1, 2, 4 and 8 threads and in automatic mode, on both
-engines (tree-walker and p-code).
+engines (tree-walker and p-code) and from compiled `.dcl` files.
 
 | Piece | State |
 |---|---|
@@ -47,7 +47,9 @@ dolphin --needs file.dol       # needs per function, and whether its calls can r
 dolphin --threads N file.dol   # exactly N threads (1 = sequential)
 dolphin file.dol               # automatic: sized from the CPU topology, adapts to load
 dolphin --engine pcode f.dol   # run function bodies as p-code (doc/PCODE.md); default: tree-walker
-dolphin --disasm file.dol      # print every function's p-code
+dolphin --disasm file.dol      # print the module's and every function's p-code
+dolphin -c file.dol            # compile to file.dcl (-o out.dcl, --strip drops register names)
+dolphin file.dcl [args...]     # run a compiled file: no source needed (doc/PCODE.md §6–7)
 dolphin --stats file.dol       # wall time, dispatch counts and output batching, on stderr
 dolphin --sync-output file.dol # print() writes directly instead of via the printer thread
 dolphin --trace file.dol       # every dispatch decision and why, failures, parallel maps (stderr)
@@ -180,6 +182,15 @@ Checked with ThreadSanitizer and AddressSanitizer as well as the golden tests.
 - `X.err`: expected error message and a nonzero exit.
 - `X.needs`: expected `--needs` output.
 
+Every check runs in four modes: the tree-walker, p-code, p-code without
+optimizations, and `dcl` (compiled with `-c`, then the `.dcl` file run). Set
+`ENGINE` to run one, and `THREADS` to choose thread counts.
+
+`tests/fuzz_dcl.sh BUILD_DIR [N] [SEED]` fuzzes the `.dcl` loader and verifier
+(build the `dcl_fuzz` target first, ideally with `-DDOLPHIN_SANITIZE=ON`):
+mutated files must be rejected with a reason or load, and the ones that load
+must run without crashing.
+
 `tests/py_oracle.py program.dol args...` runs a program under CPython instead, supplying
 `read_file` and `DecodeError`. The expected output of `examples/metar.dol` comes from it.
 Anything written in the Python-compatible subset of Dolphin should be tested this way.
@@ -225,7 +236,10 @@ src/ast.*        tree, needs bitmask, --ast dump
 src/resolver.*   static name binding (locals/slots, globals, builtins)
 src/analyzer.*   whole-program needs inference
 src/value.*      runtime values, repr/str, UTF-8 helpers
-src/interp.*     tree-walking evaluator, dispatch/join/barrier logic
+src/interp.*     tree-walking evaluator, p-code interpreter, dispatch/join/barrier logic
+src/pcode.*      AST → p-code compiler, optimizations, disassembler
+src/dcl.*        .dcl writer and loader, SHA-256
+src/verify.cpp   .dcl verifier: bounds, control flow, fresh containers, recomputed analysis
 src/runtime.*    thread pool and futures
 src/builtins.cpp builtins + needs table, methods, format specs
 src/main.cpp     driver

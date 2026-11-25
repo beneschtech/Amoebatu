@@ -35,6 +35,8 @@ add_library(dolphin_core STATIC
   src/topology.cpp
   src/sharedprofile.cpp
   src/pcode.cpp
+  src/dcl.cpp
+  src/verify.cpp
   src/analyzer.cpp
   src/interp.cpp
   src/builtins.cpp
@@ -55,13 +57,19 @@ add_executable(dolphin src/main.cpp)
 target_link_libraries(dolphin PRIVATE dolphin_core)
 target_compile_options(dolphin PRIVATE -Wall -Wextra -Wpedantic)
 
+# Mutation fuzzer for the .dcl loader and verifier (tests/fuzz_dcl.sh runs it).
+# Not built by default; most useful in a DOLPHIN_SANITIZE build.
+add_executable(dcl_fuzz EXCLUDE_FROM_ALL tests/dcl_fuzz.cpp)
+target_link_libraries(dcl_fuzz PRIVATE dolphin_core)
+target_compile_options(dcl_fuzz PRIVATE -Wall -Wextra -Wpedantic)
+
 if(DOLPHIN_SANITIZE STREQUAL "thread")
   set(_dolphin_san thread)
 elseif(DOLPHIN_SANITIZE)
   set(_dolphin_san address,undefined)
 endif()
 if(_dolphin_san)
-  foreach(t dolphin_core dolphin)
+  foreach(t dolphin_core dolphin dcl_fuzz)
     target_compile_options(${t} PRIVATE -fsanitize=${_dolphin_san} -fno-omit-frame-pointer)
     target_link_options(${t} PRIVATE -fsanitize=${_dolphin_san})
   endforeach()

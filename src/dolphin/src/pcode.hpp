@@ -109,6 +109,7 @@ enum class OpCode : uint8_t {
     // jump by the offset in the next word (a JMP), else skip it. One dispatch, no bool value.
     // Order matches Op::Eq..Op::NotIn.
     JEQ, JNE, JLT, JLE, JGT, JGE, JIN, JNOTIN,
+    SETG,       ///< ABx global named N[Bx] = rA (module code only; the verifier rejects it elsewhere)
 };
 
 /// @brief Mnemonic of an opcode, for the disassembler.
@@ -205,6 +206,20 @@ struct CompileHooks {
  *         65,536 table entries); the caller then runs it on the tree-walker.
  */
 std::unique_ptr<PCode> compileFunction(const Def& d, const CompileHooks& hooks);
+
+/**
+ * @brief Compile a module's top-level code to p-code.
+ *
+ * Module-level names are globals: assignments, `for` and comprehension
+ * variables, `except ... as` names and `def`s all become SETG (as the
+ * tree-walker writes them into the global table). Module code never
+ * dispatches, so no SPAWN or PMAP is emitted. @p self is a stand-in Def
+ * (no parameters, no locals) that names the code `<module>`; it must outlive
+ * the result.
+ * @return Null if some statement can't be compiled; the caller then runs the
+ *         module on the tree-walker.
+ */
+std::unique_ptr<PCode> compileModule(const Module& m, const Def& self, const CompileHooks& hooks);
 
 /// @brief Human-readable listing of @p p (`dolphin --disasm`).
 std::string disassemble(const PCode& p);

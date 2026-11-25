@@ -14,12 +14,13 @@
 set -u
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 THREADS=${THREADS:-"1 2 4 8 auto"}
-# Every test runs on each engine unless ENGINE picks one: tree, pcode, or
+# Every test runs on each engine unless ENGINE picks one: tree, pcode,
 # pcode0 (p-code without optimizations, so each optimization is checked
-# against the plain form).
+# against the plain form), or dcl (compile with -c, then run the .dcl file:
+# the loader and verifier must give back exactly the same program).
 if [ -z "${ENGINE:-}" ]; then
     rc=0
-    for e in tree pcode pcode0; do
+    for e in tree pcode pcode0 dcl; do
         echo "== engine: $e"
         ENGINE=$e "$0" "$@" || rc=1
     done
@@ -27,8 +28,30 @@ if [ -z "${ENGINE:-}" ]; then
 fi
 # Thread-count (and engine) arguments for one entry of $THREADS.
 thr() {
-    if [ "$ENGINE" = pcode0 ]; then echo "--engine pcode --opt 0"; else echo "--engine $ENGINE"; fi
+    case "$ENGINE" in
+    pcode0) echo "--engine pcode --opt 0" ;;
+    dcl) ;;   # a .dcl is always p-code
+    *) echo "--engine $ENGINE" ;;
+    esac
     [ "$1" = auto ] || echo "--threads $1"
+}
+# runp PROGRAM [dolphin options...] [-- program args...]
+# Runs PROGRAM; with ENGINE=dcl, compiles it once and runs the .dcl instead.
+# Compile-time output (warnings, syntax errors) is replayed on stderr, so
+# expected-output files compare the same way for every engine.
+DCLDIR=$(mktemp -d)
+trap 'rm -rf "$DCLDIR"' EXIT
+runp() {
+    p=$1; shift
+    opts=""
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do opts="$opts $1"; shift; done
+    [ "${1:-}" = -- ] && shift
+    if [ "$ENGINE" != dcl ]; then "$BIN" $opts "$p" "$@"; return; fi
+    d="$DCLDIR/$(echo "$p" | tr '/.' '__').dcl"
+    if [ ! -f "$d.rc" ]; then "$BIN" -c -o "$d" "$p" 2>"$d.cerr"; echo $? >"$d.rc"; fi
+    cat "$d.cerr" >&2
+    [ "$(cat "$d.rc")" = 0 ] || return 1
+    "$BIN" $opts "$d" "$@"
 }
 cd "$(dirname "$0")/cases" || exit 2
 pass=0 fail=0
@@ -37,18 +60,18 @@ for src in *.dol; do
     name=${src%.dol}
     for t in $THREADS; do
         if [ -f "$name.out" ]; then
-            "$BIN" $(thr "$t") "$src" 2>/dev/null | diff -u "$name.out" - >/dev/null; report $? "$name (stdout, $t threads)"
+            runp "$src" $(thr "$t") 2>/dev/null | diff -u "$name.out" - >/dev/null; report $? "$name (stdout, $t threads)"
         fi
         if [ -f "$name.out" ] && [ "$t" = 1 ]; then   # the synchronous-output path too
             "$BIN" --threads 1 --sync-output "$src" 2>/dev/null | diff -u "$name.out" - >/dev/null; report $? "$name (stdout, --sync-output)"
         fi
         if [ -f "$name.both" ]; then
-            "$BIN" $(thr "$t") "$src" > /tmp/dolphin_both.$$ 2>&1
+            runp "$src" $(thr "$t") > /tmp/dolphin_both.$$ 2>&1
             diff -u "$name.both" /tmp/dolphin_both.$$ >/dev/null; report $? "$name (stdout+stderr order, $t threads)"
             rm -f /tmp/dolphin_both.$$
         fi
         if [ -f "$name.err" ]; then
-            if "$BIN" $(thr "$t") "$src" >/dev/null 2>/tmp/dolphin_err.$$; then report 1 "$name (expected failure, $t threads)"
+            if runp "$src" $(thr "$t") >/dev/null 2>/tmp/dolphin_err.$$; then report 1 "$name (expected failure, $t threads)"
             else diff -u "$name.err" /tmp/dolphin_err.$$ >/dev/null; report $? "$name (stderr, $t threads)"; fi
         fi
     done
@@ -61,7 +84,7 @@ cd ..
 example() {   # example <name> <expected-output> <args...>
     name=$1 expected=$2; shift 2
     for t in $THREADS; do
-        "$BIN" $(thr "$t") "../examples/$name.dol" "$@" 2>&1 | diff -u "$expected" - >/dev/null; report $? "example $name $* ($t threads)"
+        runp "../examples/$name.dol" $(thr "$t") -- "$@" 2>&1 | diff -u "$expected" - >/dev/null; report $? "example $name $* ($t threads)"
     done
 }
 example grib_ls grib_ls.out data/synthetic.grib2

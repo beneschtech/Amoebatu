@@ -1,0 +1,88 @@
+# While conditions with parts that look invariant but aren't, and parts that
+# are. Hoisting must never change results (checked against CPython).
+
+def grows(n):
+    xs = [0]
+    i = 0
+    while i < len(xs):            # xs grows inside: len must be re-evaluated
+        if len(xs) < n:
+            xs.append(i + 1)
+        i += 1
+    return i
+
+def shrinks(xs):
+    count = 0
+    while 0 < len(xs):            # pop inside
+        xs.pop()
+        count += 1
+    return count
+
+def add_one(lst):
+    lst.append(1)
+
+def grows_in_callee(n):
+    xs = []
+    while len(xs) < n:            # mutated by a function call
+        add_one(xs)
+    return len(xs)
+
+def text_scan(s: str, ch: str):
+    i = 0
+    hits = 0
+    while i < len(s):             # str parameter: invariant, hoistable
+        if s[i] == ch:
+            hits += 1
+        i += 1
+    return hits
+
+def bytes_scan(b: bytes):
+    off = 0
+    total = 0
+    while off < len(b) - 1:       # bytes parameter with arithmetic: hoistable
+        total += b[off]
+        off += 2
+    return total
+
+def reassigned(n):
+    lim = 3
+    i = 0
+    while i < lim * 2:            # lim changes inside: not invariant
+        i += 1
+        if i == 2:
+            lim = n
+    return i
+
+def untouched(xs):
+    i = 0
+    s = 0
+    while i < len(xs):            # no mutation anywhere in the loop: hoistable
+        s += xs[i]
+        i += 1
+    return s
+
+def via_index(d):
+    keys = ["a"]
+    i = 0
+    while i < len(keys):          # item assignment counts as possible mutation
+        d[keys[i]] = i
+        if i == 0:
+            keys.append("b")
+        i += 1
+    return d
+
+def unbound_first(flag):
+    if flag:
+        i = 0
+    while i < len("abc"):         # i may be unbound: the error comes from i, not len
+        i += 1
+    return i
+
+def main():
+    print(grows(5), shrinks([1, 2, 3]), grows_in_callee(4))
+    print(text_scan("banana", "a"), bytes_scan(b"abcdef"))
+    print(reassigned(7), untouched([1, 2, 3, 4]), via_index({}))
+    print(unbound_first(True))
+    try:
+        print(unbound_first(False))
+    except NameError:
+        print("unbound")
