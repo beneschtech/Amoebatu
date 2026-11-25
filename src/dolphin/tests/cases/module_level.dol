@@ -1,0 +1,34 @@
+# Module-level code: globals written by assignment, augmented assignment,
+# for loops, comprehensions, except-as and defs, all before main() runs.
+
+TOTAL = 0
+for n in [1, 2, 3, 4]:
+    TOTAL += n
+
+SQUARES = [k * k for k in range(5) if k != 2]
+TABLE = {}
+for name in ["a", "bb", "ccc"]:
+    TABLE[name] = len(name)
+
+def helper(x):
+    return x * 10
+
+SCALED = [helper(v) for v in SQUARES]
+
+try:
+    BAD = int("nope")
+except ValueError as err:
+    BAD = -1
+    MESSAGE = str(err).startswith("invalid literal")
+
+COUNT = 0
+i = 0
+while i < len(SQUARES):
+    if SQUARES[i] > 5:
+        COUNT += 1
+    i += 1
+
+def main():
+    print(TOTAL, n, SQUARES, TABLE)
+    print(SCALED, BAD, MESSAGE)
+    print(COUNT, i)

@@ -37,6 +37,29 @@ static thread_local uint64_t tl_ops = 0;
 static thread_local bool tl_waited = false;
 static thread_local std::vector<DolphinError> tl_handling;   // exceptions being handled, for bare `raise`
 
+/// @brief A call's registers and their bound flags: inline for small functions
+///        (most of them), heap for big ones. Saves two allocations per call.
+struct RegFile {
+    static constexpr size_t kInline = 24;
+    Value inlineR[kInline];
+    uint8_t inlineB[kInline] = {};
+    std::unique_ptr<Value[]> heapR;
+    std::unique_ptr<uint8_t[]> heapB;
+    Value* R;
+    uint8_t* B;
+    explicit RegFile(size_t n) {
+        if (n <= kInline) {
+            R = inlineR;
+            B = inlineB;
+        } else {
+            heapR = std::make_unique<Value[]>(n);
+            heapB = std::make_unique<uint8_t[]>(n);   // value-initialized: all unbound
+            R = heapR.get();
+            B = heapB.get();
+        }
+    }
+};
+
 Interp::Interp(const Module& m, unsigned threads, bool asyncOutput) : mod_(m) {
     installBuiltins();
     if (asyncOutput) out_ = std::make_unique<OutputChannel>(stdout);
@@ -231,7 +254,12 @@ int Interp::run(const std::vector<std::string>& args) {
     mainTask.frames.push_back(&g);
     Value ret;
     try {
-        execBlock(mod_.body, g, ret);
+        if (modulePcode_) {
+            RegFile rf(modulePcode_->nregs);
+            execPcode(*modulePcode_, g, rf.R, rf.B);
+        } else {
+            execBlock(mod_.body, g, ret);
+        }
         auto it = globals_.find("main");
         int rc = 0;
         if (it != globals_.end() && it->second.is<std::shared_ptr<const Function>>()) {
@@ -1478,28 +1506,6 @@ Value Interp::callValue(const Value& fn, Args& args, Kwargs& kw, int line) {
     raise("TypeError", "'" + typeName(fn) + "' object is not callable", line);
 }
 
-/// @brief A call's registers and their bound flags: inline for small functions
-///        (most of them), heap for big ones. Saves two allocations per call.
-struct RegFile {
-    static constexpr size_t kInline = 24;
-    Value inlineR[kInline];
-    uint8_t inlineB[kInline] = {};
-    std::unique_ptr<Value[]> heapR;
-    std::unique_ptr<uint8_t[]> heapB;
-    Value* R;
-    uint8_t* B;
-    explicit RegFile(size_t n) {
-        if (n <= kInline) {
-            R = inlineR;
-            B = inlineB;
-        } else {
-            heapR = std::make_unique<Value[]>(n);
-            heapB = std::make_unique<uint8_t[]>(n);   // value-initialized: all unbound
-            R = heapR.get();
-            B = heapB.get();
-        }
-    }
-};
 
 // Parameter binding: positional args fill parameters left to right; keyword
 // args fill by name (unknown or duplicate names are TypeErrors); remaining
@@ -1675,10 +1681,33 @@ void Interp::compileAll(const Block& b) {
     }
 }
 
+void Interp::adopt(std::unique_ptr<Program> p) {
+    program_ = std::move(p);
+    usePcode_ = true;
+    pcode_.clear();
+    for (size_t i = 0; i < program_->defs.size(); ++i) {
+        const Def* d = program_->defs[i].get();
+        pcode_[d] = std::move(program_->code[i]);
+        if (d->parallelSafe()) cost_.track(d);   // as findOverlap() does for source functions
+    }
+    moduleDef_ = std::move(program_->moduleDef);
+    modulePcode_ = std::move(program_->init);
+}
+
 void Interp::setPcode(bool on) {
     usePcode_ = on;
     pcode_.clear();
-    if (on) compileAll(mod_.body);
+    modulePcode_.reset();
+    if (!on) return;
+    compileAll(mod_.body);
+    if (!moduleDef_) {
+        moduleDef_ = std::make_unique<Def>(1);
+        moduleDef_->name = "<module>";
+    }
+    CompileHooks hooks;
+    hooks.builtin = [this](const std::string& n) { return builtins_.at(n); };
+    hooks.optimize = optimize_;   // module code never dispatches: no overlap/reorderable hooks
+    modulePcode_ = compileModule(mod_, *moduleDef_, hooks);
 }
 
 // The p-code interpreter (P1a: sequential). One switch per instruction; the
@@ -1732,6 +1761,7 @@ Value Interp::execPcode(const PCode& p, Frame& f, Value* R, uint8_t* B) {
                         raise("UnboundLocalError", "local variable '" + unboundName(a) + "' referenced before assignment",
                               p.lines[cur]);
                     break;
+                case OpCode::SETG: globals_[p.names[ins::bx(w)]] = R[a]; break;
                 case OpCode::GETG: {
                     auto& slot = p.globalCache[ins::bx(w)];
                     const Value* gv = slot.load(std::memory_order_acquire);
@@ -1904,7 +1934,11 @@ Value Interp::execPcode(const PCode& p, Frame& f, Value* R, uint8_t* B) {
                 case OpCode::CONCAT: {
                     unsigned b = ins::b(w), n = ins::c(w);
                     size_t total = 0;
-                    for (unsigned i = 0; i < n; ++i) total += R[b + i].s().s.size();
+                    for (unsigned i = 0; i < n; ++i) {
+                        // The compiler only concatenates strings; a malformed .dcl might not.
+                        if (!R[b + i].isStr()) raise("TypeError", "f-string part is not a string", p.lines[cur]);
+                        total += R[b + i].s().s.size();
+                    }
                     std::string out;
                     out.reserve(total);
                     for (unsigned i = 0; i < n; ++i) out += R[b + i].s().s;
@@ -1994,7 +2028,9 @@ Value Interp::execPcode(const PCode& p, Frame& f, Value* R, uint8_t* B) {
                     B[a] = 1;
                     break;
                 case OpCode::HPUSH: tl_handling.push_back(caught); break;
-                case OpCode::HPOP: tl_handling.pop_back(); break;
+                case OpCode::HPOP:
+                    if (!tl_handling.empty()) tl_handling.pop_back();   // unbalanced only in a malformed .dcl
+                    break;
                 case OpCode::RETHROW: throw caught;
                 case OpCode::SETTLE: settle(f); break;
                 case OpCode::FORCE:
@@ -2031,6 +2067,9 @@ Value Interp::execPcode(const PCode& p, Frame& f, Value* R, uint8_t* B) {
                     auto& rows = R[cs.self].l().items;
                     items.reserve(rows.size());
                     for (auto& row : rows) {
+                        // Rows are built by this function (verifier); the shape check only matters for a malformed .dcl.
+                        if (!row.isList() || row.l().items.size() < npos)
+                            raise("RuntimeError", "malformed parallel map arguments", p.lines[cur]);
                         auto& vals = row.l().items;
                         MapItem it;
                         it.args.assign(vals.begin(), vals.begin() + static_cast<long>(npos));
@@ -2049,7 +2088,7 @@ Value Interp::execPcode(const PCode& p, Frame& f, Value* R, uint8_t* B) {
             for (const ExcEntry& x : p.excTable) {
                 if (cur < x.start || cur >= x.end) continue;
                 if (x.handlerBody) {   // leaving a handler body: that handling is over
-                    tl_handling.pop_back();
+                    if (!tl_handling.empty()) tl_handling.pop_back();
                     continue;
                 }
                 caught = preferEarlier(f, e);
@@ -2060,7 +2099,7 @@ Value Interp::execPcode(const PCode& p, Frame& f, Value* R, uint8_t* B) {
             if (!handled) throw;
         } catch (...) {   // DeferredFailure and anything else: just end handling on the way out
             for (const ExcEntry& x : p.excTable)
-                if (x.handlerBody && cur >= x.start && cur < x.end) tl_handling.pop_back();
+                if (x.handlerBody && cur >= x.start && cur < x.end && !tl_handling.empty()) tl_handling.pop_back();
             throw;
         }
     }

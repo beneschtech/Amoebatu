@@ -1,6 +1,6 @@
 # Dolphin p-code and the `.dcl` file format — design sketch v0.1
 
-*Status: sketch for markup. Implements decision 21 (LANGUAGE.md). File extension `.dcl` (no conflict that matters on Linux: AutoCAD dialog files and OpenVMS scripts use it too; the magic number tells them apart).*
+*Status: P1 (p-code engine) and P2 (`.dcl` files) built; §6a and §8 are proposals. Implements decision 21 (LANGUAGE.md). File extension `.dcl` (no conflict that matters on Linux: AutoCAD dialog files and OpenVMS scripts use it too; the magic number tells them apart).*
 
 ## 1. Goals
 
@@ -47,7 +47,7 @@ Limits: 256 registers per function, 65,536 constants per module, and 65,536 call
 | `LOADK` | ABx | rA = K[Bx] (uncounted reference) |
 | `LOADI` | AsBx | rA = sBx (small int) |
 | `LOADNIL` / `LOADTRUE` / `LOADFALSE` | A | None / True / False |
-| `GETGLOBAL` / `SETGLOBAL` | ABx | global slot Bx. `SETGLOBAL` is valid only in module init code. |
+| `GETG` / `SETG` | ABx | global named N[Bx]. `SETG` is valid only in module code (the verifier rejects it elsewhere). |
 | `GETFUNC` | ABx | rA = function Bx of this module (only when used as a value; direct calls use `CALL`) |
 
 **Arithmetic, comparison, unary** (operands in registers, result in rA; semantics exactly as `Interp::binary` and `Interp::compare` today)
@@ -145,49 +145,64 @@ The tree-walker makes a recursive `eval`/`exec` call per node and hashes the nam
 
 ## 6. The `.dcl` file
 
-Little-endian throughout. Sections are 8-byte aligned, so code can be memory-mapped and run in place.
+*As built in P2 (format version 0.1; major 0 means the format may still change).* Little-endian throughout. Sections are 8-byte aligned, and all instruction words sit together in CODE, so code could be memory-mapped and run in place.
 
 ```
 Header (64 bytes)
-  magic        8   89 44 43 4C 0D 0A 1A 0A   ("\x89DCL\r\n\x1a\n", PNG-style:
-                                             catches text-mode transfers and
-                                             distinguishes from AutoCAD .dcl)
-  major        2   format major version: a runtime refuses majors it doesn't know
-  minor        2   additions only: older runtimes may refuse a newer minor
-  flags        4   bit 0 debug info present, bit 1 signed
+  magic        8   89 44 43 4C 0D 0A 1A 0A   ("\x89DCL\r\n\x1a\n", PNG-style: catches
+                                             text-mode transfers, tells it from AutoCAD .dcl)
+  major        2   a runtime refuses majors it doesn't know
+  minor        2   additions only; a runtime refuses a newer minor
+  flags        4   bit 0 debug info present, bit 1 signed (rejected until M5)
   sourceHash  32   SHA-256 of the source it was compiled from
-  compilerId   8   compiler version that produced it
+  compilerId   8   compiler that wrote it ("dolphn02")
   nsections    4
   reserved     4
-Section directory: nsections × {type u32, reserved u32, offset u64, size u64}
+Section directory: nsections × {type u32 (fourcc), reserved u32, offset u64, size u64}
 Sections:
-  STRS   string table (UTF-8, length-prefixed). Names, capability strings, messages.
-  CONS   constant pool: tagged entries (int, float, str→STRS, bytes)
-  GLOB   global slots: name (STRS), init order
-  FUNC   per function: name, params (names, defaults as constants), nregs,
-         needs bitmask + capability strings, flags (parallel-safe, mutates
-         args, per-param mutation), code, call-site table, exception table,
-         line table (delta-encoded pc→line)
-  DEBG   optional, strippable: source file name, register names per function
-  SIGN   optional, last: OpenPGP detached signature (Ed25519 key) over every
-         preceding byte
+  META   source file name (for error messages), module name
+  STRS   string table: every name, string constant, bytes constant
+  CODE   every function's instruction words, as u32s
+  FUNC   per function, then the module's top-level code as one more entry:
+         name, line, slot, parameters (name, literal default), locals,
+         registers, iterators, code range in CODE, constants, names, call
+         sites, exception table, line table (deltas), and the analysis
+         claims (needs, mutated parameters, mutates-other)
+  IMPT   imports: must be empty until the language has modules (§6a)
+  EXPT   exports: module-level functions by name
+  DEBG   optional (dropped by --strip): register names per function
+  SIGN   reserved for M5: OpenPGP detached signature over the preceding bytes
 ```
 
-- **Pool mode** caches p-code in exactly this format, keyed by (sourceHash, compilerId). A node that gets new signed source misses the cache and compiles.
-- **Signing uses OpenPGP (GPG) with Ed25519 keys.** Publishers sign with standard `gpg`; a pool trusts a publisher by importing its published public key, as RHEL/Alma admins already do for package repos (`rpm --import`). Expiry, revocation and air-gapped key distribution come with it. The loader verifies through a small, maintained library (GPGME, or Sequoia as RPM now uses) rather than its own OpenPGP parser, to keep the code that untrusted files reach small.
-- **Stripping** (`DEBG` removed) is for shipping without register names. Line numbers stay, so error messages still point somewhere useful.
+Inside sections, integers are LEB128 varints (signed ones zigzag), floats are their 8 IEEE bytes, and strings are indexes into STRS. Constants are tagged: None, False, True, int, float, str, bytes, builtin (by name, function or exception class) and function (by index). A tag bit marks the constants INDEXK uses as dict keys; the loader recomputes their keys and hashes.
+
+Changes from the v0.1 sketch:
+- Constants stay per function, as in memory, instead of one module pool (CONS). A shared pool can come in a later minor version if files get big.
+- There is no GLOB section. Module code is compiled to p-code like a function, and writes globals by name with a new instruction, `SETG`. The global table was already name-keyed, so slot numbering wasn't worth it yet.
+- Parameter defaults must be literals (number, string, bytes, True/False/None, negative numbers). The compiler rejects other defaults with a message.
+
+Commands:
+- `dolphin -c file.dol` writes `file.dcl` (`-o` names it, `--strip` drops DEBG, `--opt 0|1` as usual). It's written to a temporary file and renamed, so readers never see half a file.
+- `dolphin file.dcl` runs it. `--disasm file.dcl` lists it. A .dcl is recognised by its magic number, not its extension.
+- Error messages name the original source file and line, as when running the source.
+
+**Pool mode** will cache p-code in exactly this format, keyed by (sourceHash, compilerId); a node that gets new signed source misses the cache and compiles. **Signing** uses OpenPGP (GPG) with Ed25519 keys: publishers sign with standard `gpg`; a pool trusts a publisher by importing its published public key, as RHEL/Alma admins already do for package repositories. The loader will verify through a maintained library (GPGME, or Sequoia as RPM now uses) rather than its own OpenPGP parser.
+
+## 6a. Several modules: bundles (planned)
+
+Each source file compiles to its own `.dcl` (a module: the unit of compilation and of the pool cache). An application is either a folder of them, linked when loaded through a search path (as Python's `.pyc`), or a **bundle**: one `.dcl` holding several module images unchanged, plus a manifest (module names, the entry module, and each import with the source hash it was compiled against). One signature covers a bundle. The loader verifies each module, binds imports by (module, name) to direct function indexes (so a call into another module costs what a local call does), then recomputes needs and parallel safety across the whole bundle: a module's claims about another are never trusted, which also covers swapping one module for another version. Import cycles are forbidden (a clean initialization order). Static linking into one flat module can come later as an optimization that produces a one-module bundle. This needs `import` in the language first; IMPT/EXPT exist now so the format doesn't change when it arrives.
 
 ## 7. Loading and verifying
 
-A standalone `.dcl` is untrusted input. The loader rejects, before running anything:
+A standalone `.dcl` is untrusted input, by accident or by design. The loader rejects, before running anything:
 
-- A bad magic number, an unknown major version, or sections that overlap or run past the file.
-- A register index ≥ nregs, a constant index past the pool, or an unknown function, global, call site or string index.
-- A jump target outside the code, and an exception table range or handler outside the code.
-- A function whose code can fall off its end (every path must reach `RETURN` or `RAISE`).
-- `SETGLOBAL` outside module init code.
+- **Format:** a bad magic number, another major or a newer minor version, unknown flags, a signed file (until M5), a missing, duplicate, unknown, overlapping or out-of-bounds section, any count larger than the bytes left (checked before allocating), any index past its table, and trailing bytes in a section.
+- **Code** (`verify.cpp`): an unknown opcode; a register ≥ the function's register count (including register ranges such as `NEWLIST`'s); a constant, name, call-site or iterator index out of range; a jump outside the code; a fused compare-and-branch, `FORNEXT` or `EXCMATCH` not followed by its `JMP` word; any path that can fall off the end; an exception-table range or handler outside the code; `SETG` outside module code; `SPAWN`/`PMAP` of anything but a function; `INDEXK` on a constant with no key.
+- **Fresh containers:** `APPEND` and `DICTSET` skip the barrier and type check other mutation has, because the compiler only emits them on a list or dict it has just made (comprehensions, displays). A forward dataflow pass proves their target holds a container created by `NEWLIST`/`NEWDICT` on every path and not read since by anything that could let it escape; `PMAP`'s argument rows likewise. Without this, a crafted file could append to a list another thread is reading.
+- **Needs and parallel safety are recomputed, not trusted.** A file could claim an IO function is pure so it gets dispatched to threads. The verifier recomputes needs (from builtins and call sites, through the call graph) and argument mutation (mutation sites traced to their root register, as the source analyzer traces names) from the p-code, and keeps the more conservative of claim and result. So a file's claims can only make a function less parallel. Temporaries are traced within their basic block, so this matches the source analyzer on every test program and example: no parallel-safe function loses that status (`DOLPHIN_DCL_TRACE=1` logs any gap).
+- **Runtime guards** cover what the verifier doesn't type-check, at one branch each: f-string parts must be strings, parallel-map rows must be argument lists, and an unbalanced handler pop is ignored.
 
-**Needs and parallel safety are recomputed, not trusted.** A file could claim an IO function is pure so it gets dispatched to threads. The analyzer runs on p-code (calls and their call-site flags are all it needs), so the loader recomputes needs and compares. A mismatch is rejected. A pool may later choose to skip the recomputation for files signed by a key it trusts (§9).
+**Fuzzing** (`tests/fuzz_dcl.sh`, `dcl_fuzz`): mutants of every test program and example (bit flips, byte writes, truncation, insertions, deletions, header and instruction edits) must be rejected with a reason or load; the ones that load are then run in their own processes with a time limit. 60,000 mutants in the release build and 30,000 under ASan/UBSan: about 91% rejected, the rest load, and 2,000 loaded mutants ran with no crash and no sanitizer report. The first run found one real hole (an f-string concatenation that assumed strings), now guarded.
 
 ## 8. Globals: replicate, don't share (proposal)
 
@@ -267,13 +282,14 @@ So with no flags, Dolphin is within about 1–3% of the best fixed choice at eac
 | P1b | Dispatch, futures, barriers, parallel maps and decision 17 as instructions | **Built.** Same output at every thread count and in automatic mode; ASan/TSan clean. METAR on the 12600K: 1 thread −17% (1268–1285 vs 1522–1531 ms), 4 threads −10%, 16 threads −11%, automatic ~−10%, with 12–13% less CPU in parallel |
 | O1 | Optimizations (`--opt 1`, default; `--opt 0` keeps the plain form and the test runner checks both): definite-assignment removal of redundant `CHKB`s, fused compare-and-branch (`JLT a b k` + jump word, one dispatch) with `and`/`or`/`not` compiled as jump chains, integer fast paths in arithmetic and comparisons | **Built.** METAR p-code: 1,595 → 1,321 static instructions, `CHKB` 269 → 0; 6% fewer machine instructions. On the 12600K: 1 thread 1198–1216 ms (`--opt 0`: 1294–1308, tree-walker: 1562–1565), 4 threads −6% vs `--opt 0`, 16 threads ~−5% |
 | O2 | Dict lookups without rehashing: entries keep their canonical key's hash; dicts of up to 8 entries scan stored hashes, bigger ones use an open-addressing table; constant keys (`r["station"]`) are hashed once by the parser | **Built.** METAR p-code −3.1% instructions; on the 12600K −2.8% at 1 thread (1176–1183 vs 1203–1222 ms), −2.7% at 16. New `dict_big` test (growth, deletion, `1`/`1.0`/`True` keys) matches CPython |
-| P2 | `.dcl` writer, loader, verifier; `dolphin -c file.dol` → `file.dcl`; `dolphin file.dcl`; `--disasm` | Round trip: compile, write, load, run gives identical output. Fuzzed files are rejected, never crash. |
+| H1 | Loop-invariant hoisting, narrow: in a `while` whose condition is one comparison, compute the invariant operand once before the loop. Invariant = constants, globals, locals the loop never assigns, arithmetic, and `len(local)` when the local is a `str`/`bytes` parameter or the loop has no possible mutation (item assignment, append/extend/pop, unknown or mutating calls). Only hoisted when the other operand is a constant or an assigned local, so evaluation order and errors are unchanged. `--opt 1` only | **Built.** `hoist_loops` test (growing/shrinking lists, mutation by a callee, reassigned limit, unbound local) matches CPython in all three modes. Hoists `split_messages` and `walk_sections` in grib_ls; METAR's main loop mutates `r`, so it is unchanged (1119–1138 vs 1126–1147 ms). Tight qualifying `str` scan on the 12600K: 850 → 495 ms |
+| P2 | `.dcl` writer, loader, verifier; `dolphin -c file.dol` → `file.dcl`; `dolphin file.dcl`; `--disasm`; module-level code compiled to p-code (`SETG`) | **Built.** The test runner has a fourth mode, `dcl` (compile, then run the file): all 143 checks pass, at every thread count, also under ASan and TSan. Fuzzing as in §7: no crash. New `module_level` test (globals from loops, comprehensions, except-as, defs) matches CPython |
 | P3 | Global replication (§8), if measurements support it | Speedup at 8–16 threads improves on METAR |
 | P4 | Remove the tree-walker | p-code is the only engine |
 | — | Signing, pool cache | With M5 |
 
 **P1a notes.**
-- Function bodies run as p-code; module-level code still runs on the tree-walker (it runs once). A function the compiler can't handle (more than 256 registers, slice or attribute assignment) stays on the tree-walker.
+- Function bodies run as p-code. Since P2, module-level code does too (with `--engine pcode`, and always from a .dcl); before that it ran on the tree-walker. A function the compiler can't handle (more than 256 registers, slice or attribute assignment) stays on the tree-walker.
 - P1b: `SPAWN` for calls the tree-walker would dispatch (pending calls record the target register, so decision 17 restores registers as it restores variables). `FORCE` goes only before reads of locals a `SPAWN` writes. A comprehension that can run as a parallel map compiles twice, with `JMPNOPOOL` choosing: the sequential loop when there's no pool, or argument lists collected first and then `PMAP` running them through the batching code shared with the tree-walker (`Interp::parallelMap`).
 - Calls between p-code functions with positional arguments copy registers straight into the callee's registers (no argument vector), and small functions keep their registers inline (no allocation). Global reads cache the global's slot after the first lookup. Together: about 3% fewer instructions.
 - Operators, builtins, methods and formatting are shared with the tree-walker, not reimplemented. So results and error messages are the same.
@@ -281,4 +297,4 @@ So with no flags, Dolphin is within about 1–3% of the best fixed choice at eac
   - `obj[f()]` where `obj` isn't subscriptable: the tree-walker reports the object first, p-code evaluates `f()` first.
   - A call to a module function that isn't defined yet: p-code evaluates the arguments before raising the NameError.
 - Tried and reverted: moving values out of temporary registers instead of copying them, to save reference-count updates. Measured on the 12600K it gave no speedup at 1 or 16 threads (1182–1183 ms vs 1176–1183 without). Uncontended atomic increments cost a few cycles, the values threads share are already uncounted borrows, and variant moves have their own cost. Kept only the two free cases: returning a value out of an ending frame, and taking loop items out of the iteration snapshot.
-- Next: method calls still build an argument vector; loop-invariant hoisting (`len(msg)` in a `while` test), which needs the analyzer's mutation information, as its own pass; repeat `FORCE` removal (same analysis as `CHKB`).
+- Next: method calls still build an argument vector; repeat `FORCE` removal (same analysis as `CHKB`). Hoisting (H1) could widen later: knowing which list a call can mutate (alias analysis) would let METAR's `while i < len(groups)` qualify.

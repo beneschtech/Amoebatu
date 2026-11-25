@@ -47,6 +47,7 @@
 
 #include "ast.hpp"
 #include "costmodel.hpp"
+#include "dcl.hpp"
 #include "pcode.hpp"
 #include "topology.hpp"
 #include "runtime.hpp"
@@ -132,6 +133,20 @@ public:
     void setOptimize(bool on) { optimize_ = on; }
     /// @brief Compiled functions (for `--disasm`); empty unless setPcode(true).
     const std::unordered_map<const Def*, std::unique_ptr<PCode>>& pcodes() const { return pcode_; }
+    /**
+     * @brief Run a loaded `.dcl` program (loadDcl()) instead of the Module's source.
+     *
+     * Call instead of setPcode(), before run(). The interpreter takes
+     * ownership: the program's functions and module code become its p-code.
+     */
+    void adopt(std::unique_ptr<Program> p);
+    /// @brief The value of builtin @p name (function or exception class), or null (for loadDcl()).
+    const Value* builtin(const std::string& name) const {
+        auto it = builtins_.find(name);
+        return it == builtins_.end() ? nullptr : &it->second;
+    }
+    /// @brief Module top-level code as p-code, or null (tree-walker, or setPcode() not called).
+    const PCode* modulePcode() const { return modulePcode_.get(); }
     /// @brief Use the old constant thresholds instead of measured ones (`--fixed-thresholds`).
     void setFixedThresholds(bool on) { cost_.setFixed(on); }
     /// @brief Log every dispatch decision, with its reason, to stderr (`dolphin --trace`).
@@ -367,6 +382,9 @@ private:
     bool usePcode_ = false;   ///< setPcode().
     bool optimize_ = true;    ///< setOptimize().
     std::unordered_map<const Def*, std::unique_ptr<PCode>> pcode_;   ///< Compiled functions; read-only after setPcode().
+    std::unique_ptr<Program> program_;     ///< A loaded .dcl (adopt()); owns the Defs pcode_ refers to.
+    std::unique_ptr<Def> moduleDef_;       ///< Stand-in Def naming module code `<module>`.
+    std::unique_ptr<PCode> modulePcode_;   ///< Module top-level code as p-code; null: tree-walker.
     Topology topo_;   ///< Set when the thread count is automatic.
     CostModel cost_;
     /// @brief Is a single call to @p d expensive enough to be worth a thread?
