@@ -40,10 +40,27 @@ add_library(dolphin_core STATIC
   src/analyzer.cpp
   src/interp.cpp
   src/builtins.cpp
+  src/stream.cpp
+  src/json.cpp
+  src/base64.cpp
+  src/poller.cpp
+  src/listener.cpp
 )
 target_include_directories(dolphin_core PUBLIC src)
 find_package(Threads REQUIRED)
 target_link_libraries(dolphin_core PUBLIC Threads::Threads)
+# Stream (src/stream.hpp): libcurl for http(s). OpenSSL is a direct dependency
+# too: curl's TLS today, hashing and code signing later.
+find_package(CURL REQUIRED)
+find_package(OpenSSL REQUIRED)
+target_link_libraries(dolphin_core PUBLIC CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
+# JSON (src/json.hpp): jsoncpp.
+find_package(jsoncpp CONFIG REQUIRED)
+if(TARGET JsonCpp::JsonCpp)
+  target_link_libraries(dolphin_core PUBLIC JsonCpp::JsonCpp)
+else()
+  target_link_libraries(dolphin_core PUBLIC jsoncpp_lib)
+endif()
 # shm_open (shared machine profile) lives in librt before glibc 2.34 (e.g.
 # Alma/RHEL 8); newer glibc keeps an empty librt, so linking it is harmless.
 find_library(DOLPHIN_RT_LIBRARY rt)

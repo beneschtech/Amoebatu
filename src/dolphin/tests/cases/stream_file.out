@@ -1,0 +1,21 @@
+False /nonexistent/dir/x.txt: No such file or directory
+IOError: /nonexistent/dir/x.txt: No such file or directory
+True True True 0 30.0
+9 9 4
+closed: False
+True 0 True ''
+b'line one\x0a' b'line two\x0a'
+18
+b'ta' b'il'
+b''
+5 b'one'
+18 b'tail'
+19 19
+write on read-only failed
+True 4 0 b'LINE one\x0a'
+True 2
+b'LINE one\x0aline two\x0atail!\x0a'
+False unknown mode 'x' (use r, rw, wc or a)
+ValueError: whence must be 0, 1 or 2
+2.5 file:///tmp/dolphin_stream_file_test.txt
+Stream <Stream file:///tmp/dolphin_stream_file_test.txt>

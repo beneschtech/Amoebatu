@@ -104,6 +104,13 @@ public:
     void emit(std::string text);
     /// @brief Wait until all program output so far has reached the device.
     void flushOutput();
+    /**
+     * @brief Call @p fn(@p args) as a task of its own on the calling thread: a
+     *        Listener worker. It has its own frames, futures and barriers, so it
+     *        runs alongside the main program and other handlers. A Dolphin error
+     *        that escapes is reported on stderr, not thrown.
+     */
+    void runHandler(const Value& fn, Args args);
     /// @brief The async output channel, or null when output is synchronous.
     const OutputChannel* output() const { return out_.get(); }
     ~Interp();
@@ -280,6 +287,10 @@ private:
     Value callMethod(const Value& self, Method m, Args& args, int line);        ///< Built-in methods of str, bytes, list, dict.
     /// @brief Is @p m a method of @p obj's type? (What makes `obj.m` valid.)
     static bool hasMethod(const Value& obj, Method m);
+    /// @brief Methods of Stream (an effect: barrier first). Called by callMethod().
+    Value streamMethod(const Value& self, Method m, Args& args, int line);
+    /// @brief Methods of Listener (an effect: barrier first). Called by callMethod().
+    Value listenerMethod(const Value& self, Method m, Args& args, int line);
     Value callFunction(const Def& d, Args& args, Kwargs& kw, int line);        ///< Bind parameters, run a user function body.
     /// @brief Run a function's p-code. @p regs holds its registers (parameters
     ///        bound), @p bound their assigned flags. Returns the return value.

@@ -10,6 +10,8 @@
  * because they must unwind any number of C++ frames to the nearest `try`.
  */
 #include "interp.hpp"
+#include "json.hpp"
+#include "listener.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -243,6 +245,26 @@ void Interp::flushOutput() {
     if (out_) out_->drain();
 }
 
+void Interp::runHandler(const Value& fn, Args args) {
+    runAsTask([&] {
+        try {
+            Kwargs kw;
+            callValue(fn, args, kw, 0);
+        } catch (const DolphinError& e) {
+            std::string who = fn.is<std::shared_ptr<const Function>>() ? fn.as<std::shared_ptr<const Function>>()->def->name : "handler";
+            std::string conn = !args.empty() && args[0].isStream() ? " (" + args[0].as<std::shared_ptr<Stream>>()->target() + ")" : "";
+            static std::mutex m;
+            std::lock_guard<std::mutex> lk(m);
+            flushOutput();   // what the program printed before this appears before it
+            std::cerr << mod_.file << ":" << e.line << ": " << who << conn << ": " << e.cls;
+            if (!e.msg.empty()) std::cerr << ": " << e.msg;
+            std::cerr << "\n";
+        } catch (const DeferredFailure&) {
+            std::cerr << mod_.file << ": internal error: deferred failure escaped a handler\n";
+        }
+    });
+}
+
 void Interp::raise(const std::string& cls, const std::string& msg, int line) const {
     throw DolphinError{cls, msg, line};
 }
@@ -269,9 +291,11 @@ int Interp::run(const std::vector<std::string>& args) {
             Value r = callValue(it->second, a, kw, 0);
             if (r.isInt()) rc = static_cast<int>(r.as<int64_t>());
         }
+        Listener::stopAll();   // main returned: let in-flight requests finish, then stop
         flushOutput();
         return rc;
     } catch (const DolphinError& e) {
+        Listener::stopAll();
         flushOutput();   // everything printed before the error appears before its message
         std::cerr << mod_.file << ":" << e.line << ": " << e.cls;
         if (!e.msg.empty()) std::cerr << ": " << e.msg;
@@ -1211,6 +1235,12 @@ Value Interp::binary(Op op, const Value& a, const Value& b, int line) const {
         raise("TypeError",
               "unsupported operand types for " + std::string(opSpelling(op)) + ": '" + typeName(a) + "' and '" + typeName(b) + "'", line);
     };
+
+    // JSON (json.hpp): `j << x` loads x into a new document; `x << j` takes j's value.
+    if (op == Op::Shl) {
+        if (a.isJson()) return jsonLoad(*this, b, line);
+        if (b.isJson()) return jsonValue(*b.as<std::shared_ptr<const JsonDoc>>());
+    }
 
     // Sequences
     if (op == Op::Add) {

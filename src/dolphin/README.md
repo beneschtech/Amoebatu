@@ -22,6 +22,9 @@ engines (tree-walker and p-code) and from compiled `.dcl` files.
 | Interpreter: int64 with overflow errors, float, str (UTF-8, code-point indexing), bytes, list, dict | done |
 | Exceptions: hierarchy under `Error`, assignment targets untouched on failure | done |
 | Builtins: strings, f-string format specs, `sorted`, `be_u8..be_u64`, `be_i16sm/i32sm`, `be_f32/f64`, `bits` | done |
+| `Stream`: files, `http(s)://`, `tcp://`, `unix://` (see below) | done |
+| `JSON` documents (jsoncpp), bytes as `data:` URIs (see below) | done |
+| `Listener`: TCP / Unix-socket server, handlers on worker threads (see below) | done (epoll; kqueue untested) |
 | `struct`, `layout`, `match`, tuples, `x if c else y`, `lambda`, `import`, `extern`, closures | not yet implemented (keywords reserved) |
 | Static type checking (annotations are parsed but not enforced) | not yet |
 | Local parallel execution: futures, batched parallel map, measured-cost dispatch, load-based admission | done (M2) |
@@ -37,7 +40,9 @@ make -j$(nproc)
 ctest --output-on-failure
 ```
 
-C++17 or later (the Amoebatu tree builds it as C++20), no dependencies. Inside the Amoebatu tree it builds with everything else; `ctest` from the top-level build runs its tests.
+C++17 or later (the Amoebatu tree builds it as C++20). Dependencies: libcurl, OpenSSL and jsoncpp
+(`libcurl4-openssl-dev`, `libssl-dev`, `libjsoncpp-dev` on Debian/Ubuntu). curl does HTTP(S) for `Stream`; OpenSSL
+is also there for hashing and code signing later. Inside the Amoebatu tree it builds with everything else; `ctest` from the top-level build runs its tests.
 
 ## Use
 
@@ -106,6 +111,110 @@ walk_sections   pure
 ```
 
 Only `main` blocks: everything it calls is pure, so every `describe(m)` can become a future at M2.
+
+## Stream: outbound I/O
+
+`Stream(target)` is the one builtin object for I/O. Its target decides what it is and what
+it needs, so a function that touches I/O is easy to spot. Listening (servers) will be a
+separate object.
+
+```python
+f = Stream("data/obs.txt")         # a path or file://path: opened read-only
+if not f.valid:                    # opening never raises: check valid / error
+    print(f.error)
+f.open("rw")                       # r, rw (r+), wc (w: create/truncate), a: like fopen
+f.seek(-4, 2)                      # fseek; whence 0/1/2; returns the new position
+f.tell(); f.seekable               # seek/tell raise IOError on pipes and sockets
+f.read(4096); f.read(); f.readline()   # bytes; read() = to the end
+f.write("text"); f.write(b"bytes") # returns the byte count
+f.close()
+
+h = Stream("https://host/api")     # GET on the first read; h.code = HTTP status
+body = h.read()
+p = h.write({"username": "cb"})    # POST form fields: username=cb (str/bytes: posted as is)
+p.ready                            # Response: a promise. Never blocks.
+p.code, p.body, p.valid, p.error   # these wait for the request
+
+t = Stream("tcp://host:5000")      # connected socket; read/readline/write
+u = Stream("unix:///run/x.sock")
+t.set_timeout(2.5)                 # seconds, default 30; t.timeout reads it
+```
+
+- **Fields:** `valid`, `error`, `code` (HTTP status; always 0 for files and sockets),
+  `seekable`, `timeout` and `name`. Reading a field is not an effect.
+- **Errors:** an operation on a stream that isn't valid, or one that fails (including a
+  timeout), raises `IOError` and also sets `error`. `open()` returns the new `valid`.
+- **Needs:** a file is `IO`; `http(s)`, `tcp` and `unix` are `Network`. When the target is a
+  string literal, the analyzer uses its scheme. Method calls use the scheme too, when
+  every assignment to the receiver variable is `Stream(literal)` of the same kind. Anything
+  else (a computed target, a stream passed as a parameter) is `IO,Network`. The `.dcl`
+  verifier does the same on registers, but not through module globals: a function using a
+  global stream loads from a `.dcl` as `IO,Network`, which is safe, just less precise.
+
+## JSON
+
+`JSON` is a document type. Like `str`, it never changes: `j << x` builds a new document.
+Written as a statement, `name << expr` assigns, so it reads as loading into `j` or reading
+out of it:
+
+```python
+j = JSON()                         # null; JSON(x) is JSON() << x
+j << f.read().decode()             # parse text: JSONError (a ValueError) with line/column if malformed
+d << j                             # d = j.value(): dict, list or scalar (d needn't exist yet)
+j << {"stn": "KBCB", "obs": [{"t": 1}], "img": jpeg_bytes}   # dict: any nesting
+j << [1, 2.5, "x", None]           # list: simple values only, TypeError otherwise
+j << jpeg_bytes                    # "data:image/jpeg;base64,/9j/4..."
+j.toString()                       # compact, ready to POST or write
+j.prettyPrint()                    # indented two spaces
+```
+
+- **Bytes** become `data:<mime>;base64,<data>` strings, the form browsers use. The MIME
+  type comes from the first bytes (JPEG, PNG, GIF, WebP, PDF, gzip, zip, GRIB; otherwise
+  `application/octet-stream`). Reading back, any `data:...;base64,` string that decodes
+  cleanly becomes bytes again, so bytes round-trip. Base64 is FreeBSD's `b64_ntop`/`b64_pton`
+  (`src/base64.cpp`).
+- **Keys** must be `str`. jsoncpp keeps object members sorted, so output is in key order.
+- **Numbers:** ints stay ints. Floats use the shortest text that reads back exactly
+  (`0.1`, `2.0`), and NaN or infinity raises `ValueError`.
+- **The `name << expr` statement** is rewritten by the parser: if `expr` is a JSON value,
+  `name = expr.value()`; otherwise `name = name << expr`. For ints, that means `n << 2` on a line
+  by itself shifts `n` in place. In Python that statement would do nothing.
+- JSON is pure, so functions that only build or read documents can still run in parallel.
+
+## Listener: a socket server
+
+```python
+def handle(conn):                      # conn: a connected Stream (read, readline, write, timeouts)
+    conn.write("hello " + conn.name + "\n")
+    ...
+
+def main():
+    srv = Listener(8080)               # or Listener("tcp://host:port") / Listener("unix:///path")
+    srv.bind("127.0.0.1")              # optional; the first bind() replaces "all addresses"
+    srv.bind("unix:///run/app.sock")
+    srv.threads(16)                    # worker pool (default 16); srv.per_connection() for a thread each
+    srv.limit(1000)                    # connections open at once; more wait in the kernel backlog
+    srv.set_timeout(30)                # each connection's read/write timeout
+    srv.drain(30)                      # how long stop() waits for in-flight connections
+    srv.start(handle)                  # returns at once; a poll thread accepts
+    srv.wait()                         # until srv.stop(), SIGINT or SIGTERM
+```
+
+- **Threads:** a poll thread (epoll; kqueue on FreeBSD/macOS, untested) accepts and hands each
+  connection to a worker, which calls the handler as a task of its own. Handlers can still
+  run pure calls in parallel on the compute pool.
+- **Shared data:** handlers run at the same time, so `start()` refuses a handler that may change
+  a global list or dict (`ValueError`). Reading globals is fine.
+- **Stopping:** `stop()` (or a signal) stops accepting and closes the listening sockets, which
+  also removes Unix socket files. It waits up to `drain` seconds for connections in progress,
+  then shuts their sockets down so handlers return. Called from a handler, `stop()` only starts
+  the shutdown, and `wait()` finishes it. If `main` returns with a listener still running, the
+  same graceful stop happens before the program exits.
+- **Fields:** `running`, `port` (the real port after `Listener(0)`), `active`, `served`, `name`.
+  Settings must come before `start()` (`RuntimeError` after). A failed bind raises `IOError`.
+  A handler's uncaught error is printed on stderr, with the peer, and the server keeps going.
+- **Needs:** `Listener` and its methods are `Network`.
+- **Example:** `examples/echo_server.dol`.
 
 ## Parallel execution (M2)
 

@@ -1,0 +1,40 @@
+# Stream demo: write a file, read part of it back, then fetch a web page.
+#
+#   dolphin examples/stream_demo.dol
+#   dolphin --needs examples/stream_demo.dol
+#
+# Each Stream's target is a literal, so the analyzer knows exactly what each
+# function needs: the file functions are IO, and fetch() is Network (plus IO,
+# because it prints).
+
+def write_file():
+    out = Stream("/tmp/dolphin_stream_demo.txt")   # opens read-only; invalid until the file exists
+    if not out.open("wc"):                         # write/create, like fopen "wb"
+        print("cannot create:", out.error)
+        return
+    n = out.write("Dolphin says hello\n")
+    out.close()
+    print(f"wrote {n} bytes to {out.name}")
+
+def read_head():
+    inp = Stream("/tmp/dolphin_stream_demo.txt")   # a second object, opened read-only
+    if not inp.valid:
+        print("cannot open:", inp.error)
+        return
+    head = inp.read(4)
+    inp.close()
+    print(f"first 4 bytes: {head}")
+
+def fetch():
+    web = Stream("http://www.google.com")          # nothing is sent until the first read
+    try:
+        body = web.read()
+    except IOError as e:
+        print("fetch failed:", e.message)
+        return
+    print(f"GET {web.name} -> HTTP {web.code}, {len(body)} bytes")
+
+def main():
+    write_file()
+    read_head()
+    fetch()

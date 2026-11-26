@@ -1,0 +1,53 @@
+# Listener: the program connects to its own server (TCP on a free port, and a
+# Unix socket), so the output is the same at any thread count.
+def handle(conn):
+    while True:
+        line = conn.readline()
+        if line == b"":
+            return
+        conn.write(b"got " + line)
+
+def main():
+    srv = Listener(0)
+    srv.bind("127.0.0.1")
+    srv.bind("unix:///tmp/dolphin_listener_test.sock")
+    srv.threads(2)
+    srv.limit(8)
+    srv.set_timeout(5)
+    srv.drain(5)
+    print(srv.running, srv.active, srv.served)
+    srv.start(handle)
+    print(srv.running, srv.port > 0)
+
+    t = Stream("tcp://127.0.0.1:" + str(srv.port))
+    u = Stream("unix:///tmp/dolphin_listener_test.sock")
+    print(t.valid, u.valid)
+    for i in range(3):
+        t.write(f"tcp {i}\n")
+        u.write(f"unix {i}\n")
+        print(t.readline(), u.readline())
+    t.close()
+    u.close()
+
+    try:
+        srv.limit(3)
+    except RuntimeError as e:
+        print("RuntimeError:", e.message)
+    try:
+        srv.start(handle)
+    except RuntimeError as e:
+        print("RuntimeError:", e.message)
+
+    srv.stop()
+    print(srv.running, srv.active, srv.served)
+    print(Stream("tcp://127.0.0.1:" + str(srv.port)).valid)
+    print(Stream("unix:///tmp/dolphin_listener_test.sock").valid)
+
+    try:
+        Listener(0).start(print)
+    except TypeError as e:
+        print("TypeError:", e.message)
+    try:
+        Listener(70000)
+    except ValueError as e:
+        print("ValueError:", e.message)

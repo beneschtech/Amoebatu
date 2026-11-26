@@ -183,7 +183,55 @@ StmtP Parser::parseSimpleStmt() {
             return a;
         }
     }
+    if (lhs->k == Expr::K::Binary) {
+        auto& b = static_cast<Binary&>(*lhs);
+        if (b.code == Op::Shl && b.lhs->k == Expr::K::Name) return shiftStatement(line, std::move(lhs));
+    }
     return std::make_unique<ExprStmt>(line, std::move(lhs));
+}
+
+/**
+ * The statement `name << expr` assigns (json.hpp): `j << data` loads data into
+ * j, and `d << j` sets d to j's value without reading d first, so d needn't
+ * exist yet. Rewritten into plain statements, so both engines, the analyzer
+ * and .dcl files need nothing new:
+ *
+ *     if True:
+ *         $shl = expr
+ *         if __is_json($shl):
+ *             name = $shl.value()
+ *         else:
+ *             name = name << $shl      # also: int shift in place, j << data
+ *
+ * `$shl` can't be written in source, so it never clashes with a user name.
+ */
+StmtP Parser::shiftStatement(int line, ExprP shift) {
+    auto& b = static_cast<Binary&>(*shift);
+    std::string name = static_cast<const Name&>(*b.lhs).id;
+    const char* tmp = "$shl";
+    auto nm = [&](const std::string& id) { return std::make_unique<Name>(line, id); };
+    auto assign = [&](ExprP target, ExprP value) {
+        auto a = std::make_unique<Assign>(line);
+        a->target = std::move(target);
+        a->value = std::move(value);
+        return a;
+    };
+
+    auto isJson = std::make_unique<Call>(line, nm("__is_json"));
+    isJson->args.push_back(nm(tmp));
+    auto value = std::make_unique<Call>(line, std::make_unique<Attr>(line, nm(tmp), "value"));
+    auto inner = std::make_unique<If>(line);
+    Block then;
+    then.push_back(assign(nm(name), std::move(value)));
+    inner->branches.emplace_back(std::move(isJson), std::move(then));
+    inner->orelse.push_back(assign(nm(name), std::make_unique<Binary>(line, "<<", nm(name), nm(tmp))));
+
+    Block body;
+    body.push_back(assign(nm(tmp), std::move(b.rhs)));
+    body.push_back(std::move(inner));
+    auto outer = std::make_unique<If>(line);
+    outer->branches.emplace_back(std::make_unique<BoolLit>(line, true), std::move(body));
+    return outer;
 }
 
 StmtP Parser::parseIf() {

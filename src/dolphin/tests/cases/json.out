@@ -1,0 +1,40 @@
+null JSON
+{"gust":null,"layers":[{"cov":"BKN","ft":3400},7],"name":"KBCB","ok":true,"temp":14.5}
+{"gust":null,"layers":[{"cov":"BKN","ft":3400},7],"name":"KBCB","ok":true,"temp":14.5}
+KBCB 14.5 True None 3400 dict
+True
+[1,2.5,"x",null,true]
+[1, 2.5, 'x', None, True] list
+TypeError: a JSON array takes only None, bool, int, float, str and bytes, not list (put nested data in a dict)
+TypeError: a JSON array takes only None, bool, int, float, str and bytes, not dict (put nested data in a dict)
+{"n":-3,"obs":[{"t":1,"v":[1,2]},null],"raw":"data:image/png;base64,iVBORw0KGgp4eXo=","station":"KBCB"}
+{
+  "n": -3,
+  "obs": [
+    {
+      "t": 1,
+      "v": [
+        1,
+        2
+      ]
+    },
+    null
+  ],
+  "raw": "data:image/png;base64,iVBORw0KGgp4eXo=",
+  "station": "KBCB"
+}
+b'\x89PNG\x0d\x0a\x1a\x0axyz' True True
+"data:image/jpeg;base64,/9j/4GFiYw=="
+b'\xff\xd8\xff\xe0abc'
+"data:application/octet-stream;base64,aGk="
+JSONError: Line 1, Column 7: Syntax error: value, object or array expected.
+JSONError: Line 1, Column 6: Missing ',' or ']' in array declaration
+JSONError: Line 1, Column 10: Extra non-whitespace after JSON value.
+JSONError: Line 1, Column 1: Syntax error: value, object or array expected.
+caught as ValueError: JSONError
+TypeError: JSON object keys must be str, not int
+TypeError: JSON << takes str, bytes, list, dict or JSON, not int
+True True
+[3] True
+12
+just a string 43 b'hi'

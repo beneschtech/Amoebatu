@@ -1,0 +1,11 @@
+calls_file	IO	inline (has needs)
+computed	IO,Network	inline (has needs)
+fields_only	pure	parallel
+file_lit	IO	inline (has needs)
+mixed	IO,Network	inline (has needs)
+param	IO,Network	inline (has needs)
+tcp_lit	Network	inline (has needs)
+unix_lit	Network	inline (has needs)
+url_lit	Network	inline (has needs)
+uses_global	IO	inline (has needs)
+<module>	IO

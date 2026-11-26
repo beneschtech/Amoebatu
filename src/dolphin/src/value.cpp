@@ -3,6 +3,9 @@
  * @brief Value helpers: str()/repr() formatting, equality, truthiness, UTF-8.
  */
 #include "value.hpp"
+#include "json.hpp"
+#include "listener.hpp"
+#include "stream.hpp"
 
 #include <cmath>
 #include <algorithm>
@@ -160,6 +163,10 @@ std::string typeName(const Value& v) {
         std::string operator()(const std::shared_ptr<const ExcValue>& e) const { return e->cls; }
         std::string operator()(const std::shared_ptr<const BoundMethod>&) const { return "method"; }
         std::string operator()(const std::shared_ptr<Future>&) const { return "future"; }
+        std::string operator()(const std::shared_ptr<Stream>&) const { return "Stream"; }
+        std::string operator()(const std::shared_ptr<Response>&) const { return "Response"; }
+        std::string operator()(const std::shared_ptr<const JsonDoc>&) const { return "JSON"; }
+        std::string operator()(const std::shared_ptr<Listener>&) const { return "Listener"; }
     };
     return std::visit(V{}, v.v);
 }
@@ -269,6 +276,13 @@ std::string toStr(const Value& v) {
     if (v.is<std::shared_ptr<const ExcClass>>()) return "<class " + v.as<std::shared_ptr<const ExcClass>>()->name + ">";
     if (v.is<std::shared_ptr<const ExcValue>>()) return v.as<std::shared_ptr<const ExcValue>>()->msg;
     if (v.is<std::shared_ptr<const BoundMethod>>()) return "<method " + std::string(methodName(v.as<std::shared_ptr<const BoundMethod>>()->method)) + ">";
+    if (v.isStream()) return "<Stream " + v.as<std::shared_ptr<Stream>>()->target() + ">";
+    if (v.isResponse()) return "<Response>";
+    if (v.isListener()) {
+        auto& l = *v.as<std::shared_ptr<Listener>>();
+        return l.running() ? "<Listener " + l.describe() + ">" : "<Listener>";
+    }
+    if (v.isJson()) return jsonText(*v.as<std::shared_ptr<const JsonDoc>>(), false);
     return "?";
 }
 
@@ -313,6 +327,10 @@ bool valuesEqual(const Value& a, const Value& b) {
     if (a.v.index() != b.v.index()) return false;
     if (a.is<std::shared_ptr<const Function>>())
         return a.as<std::shared_ptr<const Function>>()->def == b.as<std::shared_ptr<const Function>>()->def;
+    if (a.isStream()) return a.as<std::shared_ptr<Stream>>() == b.as<std::shared_ptr<Stream>>();
+    if (a.isListener()) return a.as<std::shared_ptr<Listener>>() == b.as<std::shared_ptr<Listener>>();
+    if (a.isJson()) return jsonEqual(*a.as<std::shared_ptr<const JsonDoc>>(), *b.as<std::shared_ptr<const JsonDoc>>());
+    if (a.isResponse()) return a.as<std::shared_ptr<Response>>() == b.as<std::shared_ptr<Response>>();
     if (a.is<std::shared_ptr<const ExcClass>>())
         return a.as<std::shared_ptr<const ExcClass>>()->name == b.as<std::shared_ptr<const ExcClass>>()->name;
     return false;

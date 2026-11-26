@@ -1,0 +1,3 @@
+handle	IO,Network	inline (has needs)
+main	IO,Network	inline (has needs)
+<module>	IO,Network
