@@ -1,0 +1,39 @@
+# Needs of Stream: from the literal target, else IO and Network.
+def file_lit():
+    s = Stream("obs.txt")
+    return s.read()
+
+def url_lit():
+    return Stream("https://example.com/api").read()
+
+def tcp_lit():
+    s = Stream("tcp://localhost:5000")
+    s.write("hi")
+
+def unix_lit():
+    s = Stream("unix:///run/x.sock")
+    return s.readline()
+
+def computed(target):
+    s = Stream(target)
+    return s.read()
+
+def param(s):
+    return s.read()
+
+def fields_only(s):
+    return s.valid
+
+def mixed(flag):
+    s = Stream("a.txt")
+    if flag:
+        s = Stream("tcp://h:1")
+    return s.read()
+
+def calls_file():
+    return file_lit()
+
+LOG = Stream("log.txt")
+
+def uses_global():
+    LOG.write("x")

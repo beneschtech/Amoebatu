@@ -99,6 +99,10 @@ struct ExcClass { std::string name; std::string parent; };
 struct ExcValue { std::string cls; std::string msg; };
 struct BoundMethod;
 struct Future;
+class Stream;
+struct Response;
+struct JsonDoc;
+class Listener;
 /// @brief Tag type for `None`.
 struct NoneT {};
 
@@ -121,7 +125,9 @@ struct Value {
                            std::shared_ptr<const Function>, std::shared_ptr<const Builtin>,
                            std::shared_ptr<const ExcClass>, std::shared_ptr<const ExcValue>,
                            std::shared_ptr<const BoundMethod>,
-                           std::shared_ptr<Future>>;
+                           std::shared_ptr<Future>,
+                           std::shared_ptr<Stream>, std::shared_ptr<Response>,
+                           std::shared_ptr<const JsonDoc>, std::shared_ptr<Listener>>;
     V v;  ///< Storage.
 
     Value() : v(NoneT{}) {}                                ///< None.
@@ -136,6 +142,12 @@ struct Value {
     /// A call still running on another thread. Only ever stored in a variable,
     /// and forced (waited for) when that variable is read; see Interp::eval().
     Value(std::shared_ptr<Future> p) : v(std::move(p)) {}
+    /// An I/O stream (mutable: reading moves its position). See stream.hpp.
+    Value(std::shared_ptr<Stream> p) : v(std::move(p)) {}
+    /// The promise of an HTTP POST. See stream.hpp.
+    Value(std::shared_ptr<Response> p) : v(std::move(p)) {}
+    /// A TCP / Unix-socket server. See listener.hpp.
+    Value(std::shared_ptr<Listener> p) : v(std::move(p)) {}
 
     /// @brief Make a str value from UTF-8 bytes.
     static Value str(std::string s) { return Value(std::make_shared<const Str>(std::move(s))); }
@@ -167,6 +179,10 @@ struct Value {
     bool isList() const { return is<std::shared_ptr<List>>(); }
     bool isDict() const { return is<std::shared_ptr<Dict>>(); }
     bool isFuture() const { return is<std::shared_ptr<Future>>(); }
+    bool isStream() const { return is<std::shared_ptr<Stream>>(); }
+    bool isResponse() const { return is<std::shared_ptr<Response>>(); }
+    bool isListener() const { return is<std::shared_ptr<Listener>>(); }
+    bool isJson() const { return is<std::shared_ptr<const JsonDoc>>(); }   ///< A JSON document (json.hpp); immutable.
 
     const Str& s() const { return *as<std::shared_ptr<const Str>>(); }      ///< The str payload. Check isStr() first.
     const Bytes& b() const { return *as<std::shared_ptr<const Bytes>>(); }  ///< The bytes payload. Check isBytes() first.

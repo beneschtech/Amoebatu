@@ -1,0 +1,46 @@
+# Stream in file mode: open failures, modes, read/write, seek/tell.
+
+def show(s):
+    print(s.valid, s.code, s.seekable, repr(s.error))
+
+def main():
+    missing = Stream("/nonexistent/dir/x.txt")
+    print(missing.valid, missing.error)
+    try:
+        missing.read()
+    except IOError as e:
+        print("IOError:", e.message)
+
+    w = Stream("/tmp/dolphin_stream_file_test.txt")
+    print(w.open("wc"), w.valid, w.seekable, w.code, w.timeout)
+    print(w.write("line one\n"), w.write(b"line two\n"), w.write("tail"))
+    w.close()
+    print("closed:", w.valid)
+
+    r = Stream("file:///tmp/dolphin_stream_file_test.txt")
+    show(r)
+    print(r.readline(), r.readline())
+    print(r.tell())
+    print(r.read(2), r.read())
+    print(r.read())
+    print(r.seek(5), r.read(3))
+    print(r.seek(-4, 2), r.read())
+    print(r.seek(-3, 1), r.tell())
+    try:
+        r.write("nope")
+    except IOError as e:
+        print("write on read-only failed")
+
+    print(r.open("rw"), r.write("LINE"), r.seek(0), r.readline())
+    print(r.open("a"), r.write("!\n"))
+    r.close()
+    print(Stream("/tmp/dolphin_stream_file_test.txt").read())
+
+    print(r.open("x"), r.error)
+    try:
+        r.seek(0, 7)
+    except ValueError as e:
+        print("ValueError:", e.message)
+    r.set_timeout(2.5)
+    print(r.timeout, r.name)
+    print(type(r), r)

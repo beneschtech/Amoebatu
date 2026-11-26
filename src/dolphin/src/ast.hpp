@@ -69,8 +69,21 @@ const char* opSpelling(Op op);
  */
 enum class Method : uint8_t {
     None,
-    upper, lower, strip, lstrip, rstrip, split, join, startswith, endswith, find, replace, count, isdigit, isalpha, isspace, encode, decode, hex, append, pop, extend, index, get, keys, values,
+    upper, lower, strip, lstrip, rstrip, split, join,
+    startswith, endswith, find, replace, count, isdigit,
+    isalpha, isspace, encode, decode, hex, append, pop,
+    extend, index, get, keys, values,
+    // Stream (stream.hpp): the only methods with needs; see isStreamMethod().
+    open, read, readline, write, seek, tell, close, set_timeout,
+    // JSON (json.hpp): pure.
+    value, toString, prettyPrint,
+    // Listener (listener.hpp): Network. set_timeout above is shared with Stream.
+    bind, threads, per_connection, limit, drain, start, stop, wait,
 };
+/// @brief Is @p m a method only Listener has? Those need Network.
+inline bool isListenerMethod(Method m) { return m >= Method::bind && m <= Method::wait; }
+/// @brief Is @p m a method of Stream? Those have needs (IO or Network); every other method is pure.
+inline bool isStreamMethod(Method m) { return m >= Method::open && m <= Method::set_timeout; }
 /// @brief The Method named @p name, or Method::None.
 Method methodByName(const std::string& name);
 /// @brief A method's name (empty for Method::None).

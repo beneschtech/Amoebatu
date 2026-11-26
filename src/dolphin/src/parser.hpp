@@ -78,6 +78,7 @@ private:
     /// @{
     StmtP parseStmt();        ///< Any statement, compound or simple.
     StmtP parseSimpleStmt();  ///< One-line statement: assignment, return, raise, expression, …
+    StmtP shiftStatement(int line, ExprP shift);   ///< `name << expr` as a statement (see parser.cpp).
     Block parseBlock();       ///< `:` then either an indented block or a one-line body.
     StmtP parseIf();          ///< `if` / `elif` / `else`.
     StmtP parseWhile();       ///< `while cond:`.

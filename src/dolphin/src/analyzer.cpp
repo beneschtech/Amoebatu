@@ -15,6 +15,7 @@
 #include <set>
 
 #include "interp.hpp"
+#include "stream.hpp"
 
 namespace dolphin {
 
@@ -26,11 +27,115 @@ struct Facts {
     std::set<const Def*> calls;     ///< Functions called with a statically known target.
 };
 
+// ===================================================== stream kinds
+//
+// A Stream's needs depend on its target: IO for a file, Network otherwise.
+// `Stream("literal")` is known from the literal. A method call on a stream is
+// known when its receiver is a variable whose every assignment in scope is
+// `Stream(literal)` of the same kind; anything else (a parameter, a stream
+// built from a computed string, one passed around) gets IO|Network.
+
+constexpr unsigned kAnyStream = NeedIO | NeedNetwork;
+
+/// @brief Needs of `Stream(...)` call @p c (the callee is known to be the builtin).
+unsigned streamCtorNeeds(const Call& c) {
+    if (c.args.size() == 1 && c.kwargs.empty() && c.args[0]->k == Expr::K::Str)
+        return Stream::needsFor(static_cast<const StrLit&>(*c.args[0]).v);
+    return kAnyStream;
+}
+
+/// @brief If @p e is `Stream(...)`, its needs; else 0.
+unsigned streamCtor(const Expr& e) {
+    if (e.k != Expr::K::Call) return 0;
+    auto& c = static_cast<const Call&>(e);
+    if (c.fn->k != Expr::K::Name) return 0;
+    auto& n = static_cast<const Name&>(*c.fn);
+    if (n.bind != Bind::Builtin) return 0;
+    if (n.id == "Stream") return streamCtorNeeds(c);
+    return n.id == "Listener" ? unsigned{NeedNetwork} : 0u;   // tracked the same way, so its set_timeout is Network too
+}
+
+/// @brief For each variable in one scope ("L<slot>" or "G<name>"), the needs
+///        of the stream it holds: one kind if every assignment is a
+///        `Stream(literal)` of that kind, kAnyStream if anything else assigns it.
+struct StreamVars {
+    std::map<std::string, unsigned> kind;
+
+    static std::string key(const Name& n) {
+        return n.bind == Bind::Local ? "L" + std::to_string(n.slot) : "G" + n.id;
+    }
+    void write(const std::string& k, unsigned needs) {
+        auto [it, fresh] = kind.emplace(k, needs);
+        if (!fresh && it->second != needs) it->second = kAnyStream;
+    }
+    void other(const std::string& k) { kind[k] = kAnyStream; }
+    void name(int slot, const std::string& id) { other(slot >= 0 ? "L" + std::to_string(slot) : "G" + id); }
+
+    void block(const Block& b) {
+        for (auto& st : b) stmt(*st);
+    }
+    void stmt(const Stmt& s) {
+        switch (s.k) {
+        case Stmt::K::Assign: {
+            auto& a = static_cast<const Assign&>(s);
+            if (a.target->k != Expr::K::Name) break;
+            auto& n = static_cast<const Name&>(*a.target);
+            if (unsigned k = streamCtor(*a.value)) write(key(n), k);
+            else other(key(n));
+            break;
+        }
+        case Stmt::K::AugAssign: {
+            auto& a = static_cast<const AugAssign&>(s);
+            if (a.target->k == Expr::K::Name) other(key(static_cast<const Name&>(*a.target)));
+            break;
+        }
+        case Stmt::K::If:
+            for (auto& [c, b] : static_cast<const If&>(s).branches) block(b);
+            block(static_cast<const If&>(s).orelse);
+            break;
+        case Stmt::K::While: block(static_cast<const While&>(s).body); break;
+        case Stmt::K::For: {
+            auto& f = static_cast<const For&>(s);
+            name(f.slot, f.var);
+            block(f.body);
+            break;
+        }
+        case Stmt::K::Try: {
+            auto& t = static_cast<const Try&>(s);
+            block(t.body);
+            for (auto& h : t.handlers) {
+                if (!h.as.empty()) name(h.asSlot, h.as);
+                block(h.body);
+            }
+            break;
+        }
+        case Stmt::K::Def: {   // binds its name; its body is another scope
+            auto& d = static_cast<const Def&>(s);
+            other("G" + d.name);
+            break;
+        }
+        default: break;
+        }
+    }
+    /// @brief Needs of a Stream method called on @p recv.
+    unsigned method(const Expr& recv, const StreamVars* globals) const {
+        if (unsigned k = streamCtor(recv)) return k;   // Stream("x").read()
+        if (recv.k != Expr::K::Name) return kAnyStream;
+        auto& n = static_cast<const Name&>(recv);
+        const StreamVars* scope = n.bind == Bind::Local ? this : n.bind == Bind::Global ? globals : nullptr;
+        if (!scope) return kAnyStream;
+        auto it = scope->kind.find(key(n));
+        return it == scope->kind.end() ? kAnyStream : it->second;
+    }
+};
+
 /// @brief Visits one function body (or the module's top level) and fills in Facts.
 struct Walker {
     NeedsReport& report;
     std::string where;   ///< "def name" or "module", for warnings.
     Facts facts;
+    const StreamVars* locals = nullptr;    ///< This scope's stream variables.
+    const StreamVars* globals = nullptr;   ///< The module's.
 
     void call(const Call& c) {
         if (c.fn->k == Expr::K::Name) {
@@ -38,13 +143,16 @@ struct Walker {
             if (n.def) {                       // a known function (global or nested def)
                 facts.calls.insert(n.def);
             } else if (n.bind == Bind::Builtin) {
-                facts.direct |= builtinNeeds().at(n.id);
+                facts.direct |= n.id == "Stream" ? streamCtorNeeds(c) : builtinNeeds().at(n.id);
             } else if (n.bind != Bind::Exception) {   // constructing an exception is pure
                 unresolved(c.line, std::string("call through ") + bindName(n.bind) + " variable '" + n.id + "'");
             }
         } else if (c.fn->k == Expr::K::Attr) {
-            // Methods of builtin types (str/bytes/list/dict) are all pure.
-            expr(*static_cast<const Attr&>(*c.fn).obj);
+            // Methods of builtin types are pure, except Stream's.
+            auto& at = static_cast<const Attr&>(*c.fn);
+            if (isStreamMethod(at.method)) facts.direct |= locals ? locals->method(*at.obj, globals) : kAnyStream;
+            if (isListenerMethod(at.method)) facts.direct |= NeedNetwork;
+            expr(*at.obj);
         } else {
             expr(*c.fn);
             unresolved(c.line, "call through an expression");
@@ -423,15 +531,20 @@ NeedsReport analyzeNeeds(Module& m) {
     std::vector<Def*> defs;
     collectDefs(m.body, defs);
 
+    StreamVars globals;
+    globals.block(m.body);
     std::map<const Def*, Facts> facts;
     for (Def* d : defs) {
-        Walker w{report, "def " + d->name, {}};
+        StreamVars locals;
+        for (auto& p : d->params) locals.other("L" + std::to_string(p.slot));
+        locals.block(d->body);
+        Walker w{report, "def " + d->name, {}, &locals, &globals};
         for (auto& p : d->params)
             if (p.dflt) w.expr(*p.dflt);
         w.block(d->body);
         facts[d] = std::move(w.facts);
     }
-    Walker top{report, "module", {}};
+    Walker top{report, "module", {}, &globals, &globals};
     top.block(m.body);
 
     // Fixpoint over the call graph (handles recursion and mutual recursion).

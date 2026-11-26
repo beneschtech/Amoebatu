@@ -1,0 +1,14 @@
+# JSON is pure: building, reading and printing documents never needs IO,
+# so these can run on other threads.
+def encode(rec):
+    j = JSON()
+    j << rec
+    return j.toString()
+
+def decode(text):
+    d << JSON(text)
+    return d["name"]
+
+def shift(n):
+    n << 2
+    return n

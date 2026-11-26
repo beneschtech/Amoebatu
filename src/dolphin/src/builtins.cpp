@@ -15,8 +15,9 @@
  * ### Adding a method
  * Add it to the Method enum (ast.hpp) and kMethodNames (ast.cpp), and to the
  * type's mask here (that's what makes `obj.name` resolve), then
- * implement it in Interp::callMethod(). All methods today are pure; the
- * analyzer relies on that (see analyzer.hpp).
+ * implement it in Interp::callMethod(). Every method is pure except Stream's
+ * (isStreamMethod() in ast.hpp), which the analyzer and verifier give IO or
+ * Network; a new method with an effect must be added to that range.
  */
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,9 @@
 #include <sstream>
 
 #include "interp.hpp"
+#include "json.hpp"
+#include "listener.hpp"
+#include "stream.hpp"
 
 namespace dolphin {
 
@@ -34,6 +38,14 @@ const std::unordered_map<std::string, unsigned>& builtinNeeds() {
     static const std::unordered_map<std::string, unsigned> table = {
         // IO
         {"print", NeedIO}, {"read_file", NeedIO},
+        // IO or Network, depending on the target. The analyzer narrows this when
+        // the target is a string literal (Stream::needsFor()); see analyzer.cpp.
+        {"Stream", NeedIO | NeedNetwork},
+        // pure: JSON documents (json.hpp). __is_json is used by the parser's
+        // rewrite of the statement `name << expr` (parser.cpp).
+        {"JSON", NeedNone}, {"__is_json", NeedNone},
+        // A server (listener.hpp).
+        {"Listener", NeedNetwork},
         // pure: conversions and helpers
         {"len", NeedNone}, {"range", NeedNone}, {"str", NeedNone}, {"repr", NeedNone}, {"int", NeedNone},
         {"float", NeedNone}, {"bool", NeedNone}, {"abs", NeedNone}, {"min", NeedNone}, {"max", NeedNone},
@@ -53,7 +65,7 @@ const std::vector<std::pair<std::string, std::string>>& builtinExceptions() {
         {"KeyError", "Error"},          {"NameError", "Error"},       {"UnboundLocalError", "NameError"},
         {"AttributeError", "Error"},    {"ZeroDivisionError", "Error"}, {"OverflowError", "Error"},
         {"IOError", "Error"},           {"DecodeError", "Error"},     {"RecursionError", "Error"},
-        {"RuntimeError", "Error"},      {"SyntaxError", "Error"},
+        {"RuntimeError", "Error"},      {"SyntaxError", "Error"},     {"JSONError", "ValueError"},
     };
     return list;
 }
@@ -167,6 +179,28 @@ void Interp::installBuiltins() {
         ss << f.rdbuf();
         return Value::bytes(ss.str());
     });
+
+    // Stream(target): a file path, http(s)://, tcp://host:port or unix://path.
+    // Never raises for a target that can't be opened: check .valid and .error.
+    addBuiltin("Stream", [](Interp& in, Args& a, int line) {
+        arity(in, "Stream", a, 1, 1, line);
+        return Value(std::make_shared<Stream>(needStr(in, a[0], "target", line)));
+    });
+
+    // JSON() / JSON(x): an empty document, or JSON() << x.
+    addBuiltin("JSON", [](Interp& in, Args& a, int line) {
+        arity(in, "JSON", a, 0, 1, line);
+        return a.empty() ? jsonEmpty() : jsonLoad(in, a[0], line);
+    });
+    // Listener(port) or Listener("tcp://host:port" / "unix:///path"): configure, then start(handler).
+    addBuiltin("Listener", [](Interp& in, Args& a, int line) {
+        arity(in, "Listener", a, 1, 1, line);
+        if (a[0].isStr()) return Value(std::make_shared<Listener>(a[0].s().s));
+        int64_t port = needInt(in, a[0], "port", line);
+        if (port < 0 || port > 65535) in.raise("ValueError", "port must be 0..65535", line);
+        return Value(std::make_shared<Listener>(static_cast<int>(port)));
+    });
+    addBuiltin("__is_json", [](Interp&, Args& a, int) { return Value(a.size() == 1 && a[0].isJson()); });
 
     addBuiltin("len", [](Interp& in, Args& a, int line) {
         arity(in, "len", a, 1, 1, line);
@@ -410,10 +444,16 @@ static const uint64_t kStrMethods = methodMask({M::upper, M::lower, M::strip, M:
 static const uint64_t kBytesMethods = methodMask({M::decode, M::find, M::startswith, M::endswith, M::hex});
 static const uint64_t kListMethods = methodMask({M::append, M::pop, M::extend, M::index, M::count});
 static const uint64_t kDictMethods = methodMask({M::get, M::keys, M::values, M::pop});
+static const uint64_t kStreamMethods = methodMask({M::open, M::read, M::readline, M::write, M::seek, M::tell,
+                                                   M::close, M::set_timeout});
+static const uint64_t kListenerMethods = methodMask({M::bind, M::threads, M::per_connection, M::limit, M::drain,
+                                                     M::start, M::stop, M::wait, M::set_timeout});
+static const uint64_t kJsonMethods = methodMask({M::value, M::toString, M::prettyPrint});
 
 bool Interp::hasMethod(const Value& obj, Method m) {
     uint64_t mask = obj.isStr() ? kStrMethods : obj.isBytes() ? kBytesMethods : obj.isList() ? kListMethods
-                  : obj.isDict() ? kDictMethods : 0;
+                  : obj.isDict() ? kDictMethods : obj.isStream() ? kStreamMethods
+                  : obj.isJson() ? kJsonMethods : obj.isListener() ? kListenerMethods : 0;
     return m != Method::None && (mask >> static_cast<unsigned>(m) & 1);
 }
 
@@ -422,6 +462,32 @@ Value Interp::attribute(const Value& obj, const std::string& name, int line) con
         auto& e = *obj.as<std::shared_ptr<const ExcValue>>();
         if (name == "message") return Value::str(e.msg);
         if (name == "kind") return Value::str(e.cls);
+    }
+    if (obj.isStream()) {   // reading a field is not an effect: it reports the last operation's outcome
+        const Stream& st = *obj.as<std::shared_ptr<Stream>>();
+        if (name == "valid") return Value(st.valid());
+        if (name == "error") return Value::str(st.error());
+        if (name == "code") return Value(st.code());
+        if (name == "seekable") return Value(st.seekable());
+        if (name == "timeout") return Value(st.timeout());
+        if (name == "name") return Value::str(st.target());
+    }
+    if (obj.isListener()) {
+        const Listener& l = *obj.as<std::shared_ptr<Listener>>();
+        if (name == "running") return Value(l.running());
+        if (name == "port") return Value(int64_t{l.port()});
+        if (name == "active") return Value(int64_t{l.active()});
+        if (name == "served") return Value(static_cast<int64_t>(l.served()));
+        if (name == "error") return Value::str(l.error());
+        if (name == "name") return Value::str(l.describe());
+    }
+    if (obj.isResponse()) {   // the promise: every field but `ready` waits for the request
+        const Response& r = *obj.as<std::shared_ptr<Response>>();
+        if (name == "ready") return Value(r.ready());
+        if (name == "valid") return Value(r.get().ok);
+        if (name == "error") return Value::str(r.get().error);
+        if (name == "code") return Value(r.get().code);
+        if (name == "body") return Value::bytes(r.get().body);
     }
     Method m = methodByName(name);
     if (hasMethod(obj, m)) return Value(std::make_shared<const BoundMethod>(BoundMethod{obj, m}));
@@ -436,7 +502,191 @@ static std::string stripChars(const std::string& s, bool left, bool right, const
     return s.substr(a, b - a);
 }
 
+/// @brief Percent-encode @p s for a form body (application/x-www-form-urlencoded):
+///        unreserved characters as is, space as '+', every other byte as %XX.
+static void formEscape(const std::string& s, std::string& o) {
+    static const char* hex = "0123456789ABCDEF";
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') o += static_cast<char>(c);
+        else if (c == ' ') o += '+';
+        else {
+            o += '%';
+            o += hex[c >> 4];
+            o += hex[c & 15];
+        }
+    }
+}
+
+/**
+ * @brief Encode dict @p d as a form body: `{"username": "cbenesch"}` gives
+ *        `username=cbenesch`. Keys must be str. A value is its str(), None is
+ *        empty, and a list repeats the key once per item (`tag=a&tag=b`).
+ */
+static std::string formEncode(const Interp& in, const Dict& d, int line) {
+    std::string o;
+    auto field = [&](const std::string& k, const Value& v) {
+        if (v.isList() || v.isDict()) in.raise("TypeError", "cannot POST a nested " + typeName(v) + " as form field '" + k + "'", line);
+        if (!o.empty()) o += '&';
+        formEscape(k, o);
+        o += '=';
+        if (!v.isNone()) formEscape(v.isBytes() ? v.b().b : toStr(v), o);
+    };
+    for (auto& [k, v] : d.entries) {
+        if (!k.isStr()) in.raise("TypeError", "form field names must be str, not " + typeName(k), line);
+        if (v.isList())
+            for (auto& x : v.l().items) field(k.s().s, x);
+        else
+            field(k.s().s, v);
+    }
+    return o;
+}
+
+Value Interp::streamMethod(const Value& self, Method n, Args& a, int line) {
+    Stream& st = *self.as<std::shared_ptr<Stream>>();
+    barrier();   // an effect: everything before it must have happened
+    auto check = [&](bool ok) {
+        if (!ok) raise("IOError", st.error(), line);
+    };
+    switch (n) {
+    case M::open:
+        arity(*this, "open", a, 1, 1, line);
+        return Value(st.open(needStr(*this, a[0], "mode", line)));
+    case M::close:
+        arity(*this, "close", a, 0, 0, line);
+        st.close();
+        return Value();
+    case M::read: {
+        arity(*this, "read", a, 0, 1, line);
+        int64_t size = a.empty() || a[0].isNone() ? -1 : needInt(*this, a[0], "size", line);
+        std::string out;
+        check(st.read(size, out));
+        return Value::bytes(std::move(out));
+    }
+    case M::readline: {
+        arity(*this, "readline", a, 0, 0, line);
+        std::string out;
+        check(st.readLine(out));
+        return Value::bytes(std::move(out));
+    }
+    case M::write: {
+        arity(*this, "write", a, 1, 1, line);
+        const Value& d = a[0];
+        if (st.kind() == Stream::Kind::Http) {
+            if (!st.valid()) check(st.fail(st.error().empty() ? st.target() + ": not open" : st.error()));
+            if (d.isDict()) {
+                return Value(st.post(formEncode(*this, d.d(), line), "application/x-www-form-urlencoded"));
+            }
+            if (d.isStr()) return Value(st.post(d.s().s, "text/plain; charset=utf-8"));
+            if (d.isBytes()) return Value(st.post(d.b().b, "application/octet-stream"));
+            raise("TypeError", "write to an http stream takes dict, str or bytes, not " + typeName(d), line);
+        }
+        if (!d.isStr() && !d.isBytes()) raise("TypeError", "write() takes str or bytes, not " + typeName(d), line);
+        const std::string& data = d.isStr() ? d.s().s : d.b().b;
+        check(st.write(data));
+        return Value(static_cast<int64_t>(data.size()));
+    }
+    case M::seek: {
+        arity(*this, "seek", a, 1, 2, line);
+        int64_t off = needInt(*this, a[0], "offset", line);
+        int64_t wh = a.size() > 1 ? needInt(*this, a[1], "whence", line) : 0;
+        if (wh < 0 || wh > 2) raise("ValueError", "whence must be 0, 1 or 2", line);
+        int64_t pos = 0;
+        check(st.seek(off, wh == 0 ? SEEK_SET : wh == 1 ? SEEK_CUR : SEEK_END, pos));
+        return Value(pos);
+    }
+    case M::tell: {
+        arity(*this, "tell", a, 0, 0, line);
+        int64_t pos = 0;
+        check(st.tell(pos));
+        return Value(pos);
+    }
+    case M::set_timeout: {
+        arity(*this, "set_timeout", a, 1, 1, line);
+        double t = needNum(*this, a[0], "seconds", line);
+        if (!(t > 0) || t > 2e6) raise("ValueError", "timeout must be between 0 and 2000000 seconds", line);
+        st.setTimeout(t);
+        return Value();
+    }
+    default: break;
+    }
+    raise("AttributeError", "'Stream' has no method '" + std::string(methodName(n)) + "'", line);
+}
+
+Value Interp::listenerMethod(const Value& self, Method n, Args& a, int line) {
+    auto lp = self.as<std::shared_ptr<Listener>>();
+    Listener& l = *lp;
+    barrier();   // an effect: everything before it must have happened
+    auto config = [&](bool ok) {
+        if (!ok) raise("RuntimeError", l.error(), line);
+        return Value();
+    };
+    switch (n) {
+    case M::bind:
+        arity(*this, "bind", a, 1, 1, line);
+        return config(l.bind(needStr(*this, a[0], "address", line)));
+    case M::threads: {
+        arity(*this, "threads", a, 1, 1, line);
+        int64_t t = needInt(*this, a[0], "threads", line);
+        if (t < 1 || t > 4096) raise("ValueError", "threads must be 1..4096", line);
+        return config(l.setThreads(static_cast<unsigned>(t)));
+    }
+    case M::per_connection:
+        arity(*this, "per_connection", a, 0, 0, line);
+        return config(l.setPerConnection());
+    case M::limit: {
+        arity(*this, "limit", a, 1, 1, line);
+        int64_t t = needInt(*this, a[0], "limit", line);
+        if (t < 1 || t > 1000000) raise("ValueError", "limit must be 1..1000000", line);
+        return config(l.setLimit(static_cast<unsigned>(t)));
+    }
+    case M::set_timeout:
+    case M::drain: {
+        arity(*this, methodName(n), a, 1, 1, line);
+        double t = needNum(*this, a[0], "seconds", line);
+        if (!(t > 0) || t > 2e6) raise("ValueError", "seconds must be between 0 and 2000000", line);
+        return config(n == M::drain ? l.setDrain(t) : l.setTimeout(t));
+    }
+    case M::start: {
+        arity(*this, "start", a, 1, 1, line);
+        if (l.started()) raise("RuntimeError", "this Listener was already started (make a new one to listen again)", line);
+        const Value& fn = a[0];
+        if (!fn.is<std::shared_ptr<const Function>>())
+            raise("TypeError", "start() takes a function (def handler(conn): ...), not " + typeName(fn), line);
+        const Def& d = *fn.as<std::shared_ptr<const Function>>()->def;
+        if (d.params.empty()) raise("TypeError", "handler '" + d.name + "' must take the connection as its first parameter", line);
+        // Handlers run at the same time on several threads. Changing a global
+        // list or dict from one would race with the others (and with main).
+        if (d.mutatesOther)
+            raise("ValueError", "handler '" + d.name + "' may change shared data (a global, or something reachable "
+                                "from one); handlers run concurrently, so that would race", line);
+        Interp* in = this;
+        Value handler = fn;
+        if (!l.start([in, handler](std::shared_ptr<Stream> conn) { in->runHandler(handler, Args{Value(std::move(conn))}); }))
+            raise("IOError", l.error(), line);
+        return Value();
+    }
+    case M::stop:
+        arity(*this, "stop", a, 0, 0, line);
+        l.stop();
+        return Value();
+    case M::wait:
+        arity(*this, "wait", a, 0, 0, line);
+        l.wait();
+        return Value();
+    default: break;
+    }
+    raise("AttributeError", "'Listener' has no method '" + std::string(methodName(n)) + "'", line);
+}
+
 Value Interp::callMethod(const Value& self, Method n, Args& a, int line) {
+    if (self.isStream()) return streamMethod(self, n, a, line);
+    if (self.isListener()) return listenerMethod(self, n, a, line);
+    if (self.isJson()) {
+        arity(*this, methodName(n), a, 0, 0, line);
+        auto& d = *self.as<std::shared_ptr<const JsonDoc>>();
+        if (n == M::value) return jsonValue(d);
+        return Value::str(jsonText(d, n == M::prettyPrint));
+    }
 
     if (self.isStr()) {
         const std::string& s = self.s().s;

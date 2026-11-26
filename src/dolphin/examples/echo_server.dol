@@ -1,0 +1,43 @@
+# A line-echo server over TCP and a Unix socket.
+#
+#   dolphin examples/echo_server.dol
+#   nc localhost 7070        or        nc -U /tmp/dolphin_echo.sock
+#
+# Each connection runs handle() on a worker thread. "upper <text>" uses a pure
+# helper; "quit" closes the connection; "shutdown" stops the server, which
+# lets connections in progress finish first. Ctrl-C does the same.
+
+def shout(text: str) -> str:          # pure: could run anywhere
+    return text.upper()
+
+def handle(conn):
+    conn.write(f"hello {conn.name}\n")
+    while True:
+        line = conn.readline()
+        if line == b"":               # client hung up
+            return
+        text = line.decode().strip()
+        if text == "quit":
+            conn.write("bye\n")
+            return
+        if text == "shutdown":
+            conn.write("shutting down\n")
+            SERVER.stop()
+            return
+        if text.startswith("upper "):
+            conn.write(shout(text[6:]) + "\n")
+        else:
+            conn.write("echo: " + text + "\n")
+
+SERVER = Listener(7070)               # a global so handle() can stop it
+
+def main():
+    SERVER.bind("tcp://*:7070")       # all addresses (the default, until bind() names some)
+    SERVER.bind("unix:///tmp/dolphin_echo.sock")
+    SERVER.threads(8)                 # worker pool; SERVER.per_connection() for a thread each
+    SERVER.limit(100)                 # at most 100 connections at once; more wait in the backlog
+    SERVER.set_timeout(60)            # each connection's read/write timeout
+    SERVER.start(handle)
+    print("listening on", SERVER.name)
+    SERVER.wait()                     # until "shutdown", Ctrl-C or SIGTERM
+    print("stopped after", SERVER.served, "connections")
