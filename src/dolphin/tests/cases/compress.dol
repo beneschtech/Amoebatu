@@ -1,0 +1,40 @@
+# compress() / decompress() (compress.hpp): every format round-trips, formats
+# are detected from their magic bytes, and errors are DecodeError/ValueError.
+# The codecs are pure, so the per-format work below runs as a parallel map.
+
+def roundtrip(fmt, data):
+    c = compress(data, fmt)
+    back = decompress(c, fmt)
+    auto = back
+    if fmt != "deflate":
+        auto = decompress(c)
+    return [fmt, len(c) < len(data), back == data.encode(), auto == back]
+
+def main():
+    text = "KBCB 231515Z AUTO 00000KT 10SM BKN034 OVC050 15/13 A3006 RMK AO2\n" * 200
+    print(compressors())
+    for r in [roundtrip(f, text) for f in compressors()]:
+        print(r)
+    print(decompress(compress(b"\x00\x01\xff", "bz2")), decompress(compress("", "xz")))
+    print(len(compress(text, "zstd", 19)) <= len(compress(text, "zstd", 1)))
+    two = compress("abc", "gzip") + compress("def", "gzip")        # `cat a.gz b.gz`
+    print(decompress(two), decompress(compress("ab", "zstd") + compress("cd", "zstd")))
+    tests = [[b"not compressed at all", ""], [compress(text, "gzip")[0:40], "gzip"],
+             [compress(text, "xz")[0:40], "xz"], [b"\x28\xb5\x2f\xfd\x00", ""], [b"BZh9garbage", ""]]
+    for t in tests:
+        try:
+            if t[1] == "":
+                decompress(t[0])
+            else:
+                decompress(t[0], t[1])
+            print("no error?")
+        except DecodeError as e:
+            print("DecodeError:", e.message)
+    for bad in [["lz77", -1], ["gzip", 12], ["zstd", 0]]:
+        try:
+            if bad[1] < 0:
+                compress("x", bad[0])
+            else:
+                compress("x", bad[0], bad[1])
+        except ValueError as e:
+            print("ValueError:", e.message)

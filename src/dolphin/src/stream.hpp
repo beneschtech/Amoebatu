@@ -93,6 +93,14 @@ public:
     bool read(int64_t n, std::string& out);
     /// @brief Read through the next `\n` (included), or to the end.
     bool readLine(std::string& out);
+    /**
+     * @brief Count lines as readline() would return them: every "\n", plus a
+     *        last line without one. A seekable file is counted from the start
+     *        and its position is left where it was; anything else (a pipe, an
+     *        HTTP body) is counted from the current position to the end.
+     *        Sockets aren't supported: they have no end to count to.
+     */
+    bool countLines(int64_t& n);
     /// @brief Write all of @p data (file or socket). Not for HTTP: see post().
     bool write(const std::string& data);
     /// @brief POST @p body to an HTTP stream; the request runs on its own thread.

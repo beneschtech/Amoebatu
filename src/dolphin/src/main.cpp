@@ -41,7 +41,10 @@
 #include <sys/resource.h>
 
 #include "analyzer.hpp"
+#include "archive.hpp"
+#include "compress.hpp"
 #include "dcl.hpp"
+#include "fill.hpp"
 #include "interp.hpp"
 #include "lexer.hpp"
 #include "parser.hpp"
@@ -51,7 +54,9 @@ using namespace dolphin;
 
 static int usage() {
     std::cerr << "usage: dolphin [--tokens|--ast|--needs|--check] [--threads N] [--stats] [--sync-output] [--trace] [--fixed-thresholds] [--engine tree|pcode] [--opt 0|1] [--disasm] file.dol|file.dcl [args...]\n"
-                 "       dolphin -c [-o out.dcl] [--strip] [--opt 0|1] file.dol     compile to a .dcl file\n";
+                 "       dolphin -c [-o out.dcl] [--strip] [--opt 0|1] file.dol     compile to a .dcl file\n"
+                 "       dolphin --features                                      optional formats compiled in\n"
+                 "       dolphin --version\n";
     return 2;
 }
 
@@ -110,10 +115,22 @@ static int runWithStats(Interp& interp, const std::vector<std::string>& args, bo
     return rc;
 }
 
+// Set by the Amoebatu top-level CMakeLists.txt; a standalone build of src/dolphin doesn't have it.
+#ifndef AMOEBATU_VERSION
+#define AMOEBATU_VERSION "(standalone build)"
+#endif
+
 static int showVersion() {
    std::cout << "Dolphin compiler/runner" << std::endl;
    std::cout << "Part of the Ameobatu software suite, version " AMOEBATU_VERSION << std::endl;
    return 0;
+}
+
+/// `--features`: the optional pieces compiled in, one per line (tests/run_tests.sh reads it).
+static int showFeatures() {
+    for (auto& f : codec::available()) std::cout << f << "\n";
+    if (Archive::supported()) std::cout << "archive\n";
+    return 0;
 }
 
 int main(int argc, char** argv) {
@@ -142,6 +159,7 @@ int main(int argc, char** argv) {
         if (opt == "version") {
             return showVersion();
         }
+        if (opt == "features") return showFeatures();
         if (opt == "strip") {
             strip = true;
         } else if (opt == "tokens" || opt == "ast" || opt == "needs" || opt == "check" || opt == "disasm") {
@@ -230,6 +248,11 @@ int main(int argc, char** argv) {
         Module m = parseSource(src, path);
         resolveNames(m);
         NeedsReport report = analyzeNeeds(m);
+        // Parallel fills (fill.hpp) need the analysis to decide, and add names: redo both.
+        if (rewriteParallelFills(m) > 0) {
+            resolveNames(m);
+            report = analyzeNeeds(m);
+        }
         for (auto& w : report.warnings) std::cerr << path << ": warning: " << w << "\n";
 
         if (mode == "ast") {

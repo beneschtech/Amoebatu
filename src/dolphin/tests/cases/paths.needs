@@ -1,0 +1,4 @@
+describe	pure	parallel
+main	IO	inline (has needs)
+remove_tree	IO	inline (has needs)
+<module>	IO

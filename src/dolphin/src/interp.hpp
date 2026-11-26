@@ -291,6 +291,10 @@ private:
     Value streamMethod(const Value& self, Method m, Args& args, int line);
     /// @brief Methods of Listener (an effect: barrier first). Called by callMethod().
     Value listenerMethod(const Value& self, Method m, Args& args, int line);
+    /// @brief Methods of Path (filesystem ones are effects: barrier first). Called by callMethod().
+    Value pathMethod(const Value& self, Method m, Args& args, int line);
+    /// @brief Methods of Archive (an effect: barrier first). Called by callMethod().
+    Value archiveMethod(const Value& self, Method m, Args& args, int line);
     Value callFunction(const Def& d, Args& args, Kwargs& kw, int line);        ///< Bind parameters, run a user function body.
     /// @brief Run a function's p-code. @p regs holds its registers (parameters
     ///        bound), @p bound their assigned flags. Returns the return value.

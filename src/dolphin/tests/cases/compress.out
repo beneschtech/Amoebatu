@@ -1,0 +1,18 @@
+['gzip', 'zlib', 'deflate', 'bz2', 'xz', 'zstd']
+['gzip', True, True, True]
+['zlib', True, True, True]
+['deflate', True, True, True]
+['bz2', True, True, True]
+['xz', True, True, True]
+['zstd', True, True, True]
+b'\x00\x01\xff' b''
+True
+b'abcdef' b'abcd'
+DecodeError: decompress(): unrecognized data (not gzip, zlib, bz2, xz or zstd); raw deflate needs the format: decompress(data, "deflate")
+DecodeError: gzip: truncated data
+DecodeError: xz: truncated data
+DecodeError: zstd: truncated data
+DecodeError: bz2: corrupt data
+ValueError: unknown compression format 'lz77' (known: gzip, zlib, deflate, bz2, xz, zstd)
+ValueError: gzip level must be 0..9
+ValueError: zstd level must be 1..22

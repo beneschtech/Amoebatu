@@ -1,0 +1,67 @@
+# Path (path.hpp): pure path text, then filesystem operations in a scratch
+# directory that the test creates and removes. Listings are sorted, so the
+# output doesn't depend on directory order.
+
+def remove_tree(root):
+    if not root.exists():
+        return
+    for p in sorted(root.rglob("*")):    # files first, deepest directories last
+        if p.is_file():
+            p.unlink()
+    dirs = [p for p in root.rglob("*") if p.is_dir()]
+    i = len(dirs) - 1
+    while i >= 0:
+        dirs[i].rmdir()
+        i -= 1
+    root.rmdir()
+
+def describe(p):            # pure: only the text
+    return f"{p} name={p.name} stem={p.stem} suffix={p.suffix} parent={p.parent} parts={p.parts}"
+
+def main():
+    p = Path("data//2026/./11/") / "obs.tar.gz"
+    print(describe(p))
+    print(repr(p), type(p), str(p))
+    print(Path(), Path("/"), Path("/").parent, Path("a").parent, Path("/x/y").parts, "base" / Path("f.txt"))
+    print(p.with_suffix(".zip"), p.with_name("x.csv"), p.is_absolute(), Path("/a").is_absolute())
+    print(Path("a").joinpath("b", Path("c")), Path("a") / "/abs", Path("a", "b", "c"))
+    print(Path("a") == Path("a/"), Path("a") < Path("b"), sorted([Path("b"), Path("a")]), Path(".bashrc").suffix)
+    try:
+        p.with_suffix("zip")
+    except ValueError as e:
+        print("ValueError:", e.message)
+
+    root = Path("_tmp_paths")
+    remove_tree(root)
+    print("mkdir:", root.mkdir(), root.mkdir(), (root / "sub" / "deep").mkdir())
+    print((root / "a.txt").write_text("one\ntwo\nthree"), (root / "b.csv").write_bytes(b"x,y\n1,2\n"))
+    (root / "sub" / "c.txt").write_text("héllo\n")
+    (root / "sub" / "deep" / "d.txt").touch()
+    print([q.name for q in root.iterdir()])
+    print(root.glob("*.txt"))
+    print(root.rglob("*.txt"))
+    print(root.glob("**/d.txt"), root.glob("s?b/*"), root.glob("[ab].*"), root.glob("*.nothing"))
+    st = (root / "a.txt").stat()
+    print(st["size"], st["is_file"], st["is_dir"], st["is_link"], type(st["mtime"]), sorted(st))
+    (root / "a.txt").chmod(0o640)
+    print((root / "a.txt").stat()["perms"], f"{(root / 'a.txt').stat()['mode']:o}")
+    print(repr((root / "sub" / "c.txt").read_text()), (root / "b.csv").read_bytes())
+    print((root / "a.txt").exists(), (root / "zz").exists(), root.is_dir(), (root / "a.txt").is_file())
+    moved = (root / "b.csv").rename(root / "b2.csv")
+    print(moved, moved.exists(), (root / "b.csv").exists())
+    print(root.resolve().is_absolute(), root.resolve().name)
+    for bad in [root / "sub", root / "missing.txt"]:
+        try:
+            bad.unlink()
+        except IOError as e:
+            print("IOError:", e.message)
+    try:
+        (root / "sub").rmdir()
+    except IOError as e:
+        print("IOError:", e.message)
+    try:
+        (root / "nope").iterdir()
+    except IOError as e:
+        print("IOError:", e.message)
+    remove_tree(root)
+    print("removed:", root.exists())

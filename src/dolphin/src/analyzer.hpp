@@ -58,4 +58,15 @@ struct NeedsReport {
  */
 NeedsReport analyzeNeeds(Module& m);
 
+/**
+ * @brief May @p e be evaluated early and out of order?
+ *
+ * True when evaluating it has no effect and mutates nothing: no builtin with
+ * needs, no method with an effect (isEffectMethod()) or that mutates
+ * (append, extend, pop), and only calls to parallel-safe user functions.
+ * Needs analyzeNeeds() to have run. Used for parallel maps (comprehension
+ * arguments and conditions) and parallel fills (fill.hpp).
+ */
+bool isReorderableExpr(const Expr& e);
+
 } // namespace dolphin

@@ -41,6 +41,12 @@ constexpr unsigned kAnyStream = NeedIO | NeedNetwork;
 unsigned streamCtorNeeds(const Call& c) {
     if (c.args.size() == 1 && c.kwargs.empty() && c.args[0]->k == Expr::K::Str)
         return Stream::needsFor(static_cast<const StrLit&>(*c.args[0]).v);
+    if (c.args.size() == 1 && c.kwargs.empty() && c.args[0]->k == Expr::K::Call) {   // Stream(Path(...)): a file
+        auto& inner = static_cast<const Call&>(*c.args[0]);
+        if (inner.fn->k == Expr::K::Name && static_cast<const Name&>(*inner.fn).bind == Bind::Builtin &&
+            static_cast<const Name&>(*inner.fn).id == "Path")
+            return NeedIO;
+    }
     return kAnyStream;
 }
 
@@ -52,6 +58,7 @@ unsigned streamCtor(const Expr& e) {
     auto& n = static_cast<const Name&>(*c.fn);
     if (n.bind != Bind::Builtin) return 0;
     if (n.id == "Stream") return streamCtorNeeds(c);
+    if (n.id == "Archive") return NeedIO;   // shares read/write/close with Stream; an archive is a file
     return n.id == "Listener" ? unsigned{NeedNetwork} : 0u;   // tracked the same way, so its set_timeout is Network too
 }
 
@@ -148,10 +155,12 @@ struct Walker {
                 unresolved(c.line, std::string("call through ") + bindName(n.bind) + " variable '" + n.id + "'");
             }
         } else if (c.fn->k == Expr::K::Attr) {
-            // Methods of builtin types are pure, except Stream's.
+            // Methods of builtin types are pure, except Stream's, Listener's, Archive's
+            // and the Path methods that touch the filesystem.
             auto& at = static_cast<const Attr&>(*c.fn);
             if (isStreamMethod(at.method)) facts.direct |= locals ? locals->method(*at.obj, globals) : kAnyStream;
             if (isListenerMethod(at.method)) facts.direct |= NeedNetwork;
+            if (isPathIOMethod(at.method) || isArchiveMethod(at.method)) facts.direct |= NeedIO;
             expr(*at.obj);
         } else {
             expr(*c.fn);
@@ -525,6 +534,67 @@ void collectDefs(Block& b, std::vector<Def*>& defs) {
 }
 
 } // namespace
+
+// Comprehension conditions and arguments run early (all of them before the
+// calls), so they must not have effects or mutate anything.
+bool isReorderableExpr(const Expr& e) {
+    switch (e.k) {
+    case Expr::K::Call: {
+        auto& c = static_cast<const Call&>(e);
+        if (c.fn->k == Expr::K::Name) {
+            auto& n = static_cast<const Name&>(*c.fn);
+            if (n.bind == Bind::Builtin && n.needs != NeedNone) return false;
+            if (n.def && !n.def->parallelSafe()) return false;
+            if (!n.def && n.bind != Bind::Builtin && n.bind != Bind::Exception) return false;
+        } else if (c.fn->k == Expr::K::Attr) {
+            const std::string& m = static_cast<const Attr&>(*c.fn).name;
+            if (m == "append" || m == "extend" || m == "pop") return false;
+            if (isEffectMethod(static_cast<const Attr&>(*c.fn).method)) return false;   // stream, path, archive...
+            if (!isReorderableExpr(*static_cast<const Attr&>(*c.fn).obj)) return false;
+        } else {
+            return false;
+        }
+        for (auto& a : c.args)
+            if (!isReorderableExpr(*a)) return false;
+        for (auto& [k, v] : c.kwargs)
+            if (!isReorderableExpr(*v)) return false;
+        return true;
+    }
+    case Expr::K::FStr:
+        for (auto& p : static_cast<const FStr&>(e).parts)
+            if (p.expr && !isReorderableExpr(*p.expr)) return false;
+        return true;
+    case Expr::K::Unary: return isReorderableExpr(*static_cast<const Unary&>(e).operand);
+    case Expr::K::Binary:
+        return isReorderableExpr(*static_cast<const Binary&>(e).lhs) && isReorderableExpr(*static_cast<const Binary&>(e).rhs);
+    case Expr::K::BoolOp:
+        return isReorderableExpr(*static_cast<const BoolOp&>(e).lhs) && isReorderableExpr(*static_cast<const BoolOp&>(e).rhs);
+    case Expr::K::Compare: {
+        auto& c = static_cast<const Compare&>(e);
+        if (!isReorderableExpr(*c.first)) return false;
+        for (auto& [op, r] : c.rest)
+            if (!isReorderableExpr(*r)) return false;
+        return true;
+    }
+    case Expr::K::Index:
+        return isReorderableExpr(*static_cast<const Index&>(e).obj) && isReorderableExpr(*static_cast<const Index&>(e).index);
+    case Expr::K::Slice: {
+        auto& s = static_cast<const Slice&>(e);
+        return (!s.lo || isReorderableExpr(*s.lo)) && (!s.hi || isReorderableExpr(*s.hi));
+    }
+    case Expr::K::Attr: return isReorderableExpr(*static_cast<const Attr&>(e).obj);
+    case Expr::K::List:
+        for (auto& x : static_cast<const ListLit&>(e).elems)
+            if (!isReorderableExpr(*x)) return false;
+        return true;
+    case Expr::K::Dict:
+        for (auto& [k, v] : static_cast<const DictLit&>(e).items)
+            if (!isReorderableExpr(*k) || !isReorderableExpr(*v)) return false;
+        return true;
+    case Expr::K::ListComp: return false;   // keep nesting simple: the inner one may parallelize on its own
+    default: return true;                   // literals and names
+    }
+}
 
 NeedsReport analyzeNeeds(Module& m) {
     NeedsReport report;

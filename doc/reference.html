@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dolphin Language Reference</title>
+<meta name="description" content="Reference for Dolphin, the Amoebatu language: Python-shaped, statically analyzed, implicitly parallel.">
+<meta name="color-scheme" content="light dark">
+<!-- Generated from doc/REFERENCE.md by doc/build_reference_html.py. Edit the Markdown, not this file. -->
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1f21;--muted:#5f6670;--line:#e3e0d8;--panel:#f2efe8;--accent:#0b6e80;
+--code-bg:#f4f1ea;--kw:#8e3a9a;--str:#2f7d32;--num:#b4530b;--com:#7c8288;--bi:#0b6e80;--exc:#b3261e;--const:#b4530b;
+--mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
+--sans:system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif}
+@media (prefers-color-scheme:dark){:root{--bg:#15171a;--fg:#e4e2dd;--muted:#9aa1a9;--line:#2c3036;--panel:#1c1f23;
+--accent:#5cc3d4;--code-bg:#1e2126;--kw:#d49ade;--str:#8fcf8f;--num:#f0a35e;--com:#7f8790;--bi:#5cc3d4;--exc:#ff8a80;--const:#f0a35e}}
+*{box-sizing:border-box}
+html{scroll-padding-top:1rem}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans);-webkit-text-size-adjust:100%}
+a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:2px}
+.layout{display:grid;grid-template-columns:17rem minmax(0,1fr);max-width:84rem;margin:0 auto}
+nav{position:sticky;top:0;height:100vh;overflow-y:auto;padding:1.5rem 1rem 3rem 1.25rem;border-right:1px solid var(--line);font-size:.9rem}
+nav .brand{font-weight:700;font-size:1.05rem;margin:0 0 .75rem;color:var(--fg);text-decoration:none;display:block}
+nav input{width:100%;padding:.4rem .6rem;margin-bottom:.75rem;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);font:inherit}
+nav ul{list-style:none;margin:0;padding:0}
+nav li{margin:.1rem 0}
+nav ul ul{padding-left:.9rem;margin:.15rem 0 .4rem;border-left:1px solid var(--line)}
+nav a{color:var(--muted);text-decoration:none;display:block;padding:.1rem .3rem;border-radius:4px}
+nav a:hover,nav a.active{color:var(--fg);background:var(--panel)}
+nav > ul > li > a{color:var(--fg);font-weight:600}
+main{padding:2rem 2.5rem 6rem;max-width:56rem;min-width:0}
+h1{font-size:2.1rem;line-height:1.2;margin:0 0 .5rem}
+h2{font-size:1.5rem;margin:3rem 0 .75rem;padding-top:.5rem;border-top:1px solid var(--line)}
+h3{font-size:1.15rem;margin:2rem 0 .5rem}
+h2 .anchor,h3 .anchor{opacity:0;margin-left:.35rem;text-decoration:none;color:var(--muted);font-weight:400}
+h2:hover .anchor,h3:hover .anchor{opacity:1}
+.subtitle{color:var(--muted);margin:0 0 1.5rem}
+hr{display:none}
+p,li{max-width:48rem}
+code{font-family:var(--mono);font-size:.88em;background:var(--code-bg);padding:.1em .3em;border-radius:4px}
+pre{position:relative;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:.85rem 1rem;overflow-x:auto;line-height:1.45;margin:1rem 0}
+pre code{background:none;padding:0;font-size:.86rem}
+pre .copy{position:absolute;top:.4rem;right:.4rem;font:12px var(--sans);padding:.15rem .5rem;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--muted);cursor:pointer;opacity:0}
+pre:hover .copy,pre .copy:focus{opacity:1}
+.kw{color:var(--kw);font-weight:600}.str{color:var(--str)}.num{color:var(--num)}.com{color:var(--com);font-style:italic}
+.bi{color:var(--bi)}.exc{color:var(--exc)}.const{color:var(--const)}
+.table{overflow-x:auto;margin:1rem 0}
+table{border-collapse:collapse;font-size:.92rem;min-width:100%}
+th,td{border:1px solid var(--line);padding:.4rem .6rem;text-align:left;vertical-align:top}
+th{background:var(--panel)}
+td code,th code{white-space:nowrap}
+footer{margin-top:4rem;color:var(--muted);font-size:.85rem;border-top:1px solid var(--line);padding-top:1rem}
+.menu{display:none}
+@media (max-width:900px){
+ .layout{display:block}
+ nav{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:1rem 16px}
+ nav .brand{display:inline-block;margin:0}
+ nav .toc{display:none}
+ nav.open .toc{display:block}
+ .menu{display:inline-block;margin-left:.5rem;font:inherit;font-size:.85rem;padding:.2rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg)}
+ nav input{display:none}
+ nav.open input{display:block}
+ main{padding:1.25rem 16px 4rem}
+ h1{font-size:1.7rem}
+}
+@media print{nav{display:none}.layout{display:block}main{max-width:none}pre .copy{display:none}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav aria-label="Contents">
+<a class="brand" href="#top">Dolphin</a><button class="menu" type="button" aria-label="Show contents">Contents</button>
+<input id="filter" type="search" placeholder="Filter sections" aria-label="Filter sections">
+<ul class="toc"><li><a href="#s1">1. Coming from Python: the differences</a><ul><li><a href="#not-in-the-language-yet">Not in the language (yet)</a></li><li><a href="#things-that-behave-differently">Things that behave differently</a></li></ul></li><li><a href="#s2">2. Running programs</a><ul><li><a href="#program-structure">Program structure</a></li></ul></li><li><a href="#s3">3. Lexical structure</a><ul><li><a href="#lines-and-indentation">Lines and indentation</a></li><li><a href="#identifiers-and-keywords">Identifiers and keywords</a></li><li><a href="#numbers">Numbers</a></li><li><a href="#strings-and-bytes">Strings and bytes</a></li></ul></li><li><a href="#s4">4. Values and types</a><ul><li><a href="#references-and-copying">References and copying</a></li><li><a href="#truthiness">Truthiness</a></li><li><a href="#equality">Equality</a></li><li><a href="#ordering">Ordering (<code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>)</a></li><li><a href="#dict-keys">Dict keys</a></li></ul></li><li><a href="#s5">5. Expressions</a><ul><li><a href="#operator-precedence-lowest-to-highest">Operator precedence (lowest to highest)</a></li><li><a href="#arithmetic">Arithmetic</a></li><li><a href="#membership-in-not-in">Membership: <code>in</code> / <code>not in</code></a></li><li><a href="#indexing-and-slicing">Indexing and slicing</a></li><li><a href="#calls">Calls</a></li><li><a href="#list-comprehensions">List comprehensions</a></li><li><a href="#f-strings">f-strings</a></li><li><a href="#format-spec">Format spec</a></li></ul></li><li><a href="#s6">6. Statements</a><ul><li><a href="#s6-1">6.1 The statement list</a></li><li><a href="#s6-2">6.2 Scope</a></li></ul></li><li><a href="#s7">7. Functions</a></li><li><a href="#s8">8. Exceptions</a><ul><li><a href="#hierarchy">Hierarchy</a></li><li><a href="#raising">Raising</a></li><li><a href="#catching">Catching</a></li><li><a href="#errors-the-runtime-raises">Errors the runtime raises</a></li></ul></li><li><a href="#s9">9. Builtins and methods</a><ul><li><a href="#s9-1">9.1 Builtin functions</a></li><li><a href="#s9-2">9.2 Binary decoding (big-endian, bounds-checked)</a></li><li><a href="#s9-3">9.3 Methods</a></li><li><a href="#s9-4">9.4 JSON</a></li><li><a href="#s9-5">9.5 Stream: files and network</a></li><li><a href="#s9-6">9.6 Listener: servers</a></li><li><a href="#s9-7">9.7 Path: files and directories</a></li><li><a href="#s9-8">9.8 Compression</a></li><li><a href="#s9-9">9.9 Archive: zip, tar, 7z</a></li></ul></li><li><a href="#s10">10. Needs, purity and parallelism</a><ul><li><a href="#what-a-function-needs">What a function needs</a></li><li><a href="#what-can-run-in-parallel">What can run in parallel</a></li><li><a href="#where-parallelism-happens">Where parallelism happens</a></li><li><a href="#filling-a-preallocated-array-in-parallel">Filling a preallocated array in parallel</a></li></ul></li><li><a href="#s11">11. Writing a parser for a NOAA text product</a></li></ul>
+</nav>
+<main id="top">
+<h1>Dolphin Language Reference</h1>
+<p class="subtitle">What the interpreter actually does today. Last updated 2026-11-26: paths and directories, compression, archives, <code>count_lines()</code>, <code>array()</code> and parallel fills.</p>
+<p><code>doc/LANGUAGE.md</code> is the design draft: why things are the way they are, and what is planned. This file is the other half: the language as implemented, checked against the source (<code>src/dolphin/src/</code>) and by running programs. When the two disagree, this file describes current behaviour and LANGUAGE.md describes intent.</p>
+<p>Dolphin looks like Python and most small Python programs run unchanged. The differences are listed first, because they're what trips you up.</p>
+<hr>
+<h2 id="s1">1. Coming from Python: the differences <a class="anchor" href="#s1" aria-label="Link to this section">#</a></h2>
+<h3 id="not-in-the-language-yet">Not in the language (yet) <a class="anchor" href="#not-in-the-language-yet" aria-label="Link to this section">#</a></h3>
+<div class="table"><table><thead><tr><th>Python</th><th>Dolphin</th><th>What to write instead</th></tr></thead><tbody><tr><td><code>x is None</code>, <code>is not</code></td><td>no <code>is</code> operator (syntax error)</td><td><code>x == None</code>, <code>x != None</code></td></tr><tr><td><code>a if c else b</code></td><td>no conditional expression</td><td>an <code>if</code>/<code>else</code> statement</td></tr><tr><td><code>a, b = 1, 2</code>, <code>return a, b</code>, <code>(1, 2)</code></td><td>no tuples, no unpacking</td><td>return a list: <code>return [a, b]</code>, then <code>r[0]</code>, <code>r[1]</code></td></tr><tr><td><code>for k, v in d.items()</code></td><td>no <code>items()</code>, no unpacking</td><td><code>for k in d:</code> then <code>d[k]</code></td></tr><tr><td><code>global X</code> / <code>nonlocal</code></td><td>no such statements</td><td>see <a href="#s6-2">§6.2</a> (mutate a global list/dict, or return values)</td></tr><tr><td><code>lambda</code>, closures</td><td>reserved / rejected</td><td>a module-level <code>def</code>, passing what it needs as arguments</td></tr><tr><td><code>class</code></td><td>no classes, structs or objects yet</td><td>dicts for records; <code>struct</code> is reserved for later</td></tr><tr><td><code>import</code></td><td>reserved, not implemented</td><td>one file per program for now</td></tr><tr><td><code>os.listdir</code>, <code>os.makedirs</code>, <code>os.stat</code>, <code>glob.glob</code></td><td>no <code>os</code> module</td><td><code>Path</code> (<a href="#s9-7">§9.7</a>), which works like <code>pathlib</code></td></tr><tr><td><code>gzip.open</code>, <code>zipfile</code>, <code>tarfile</code></td><td>no modules</td><td><code>decompress(read_file(p))</code> (<a href="#s9-8">§9.8</a>), <code>Archive</code> (<a href="#s9-9">§9.9</a>)</td></tr><tr><td><code>try</code> … <code>finally</code> / <code>else</code></td><td>not supported</td><td><code>except</code> clauses only</td></tr><tr><td><code>except (A, B):</code></td><td>no tuple of classes</td><td>two <code>except</code> clauses, or catch a common parent</td></tr><tr><td>user-defined exceptions</td><td>not possible (no classes)</td><td>raise a builtin one with a message (<code>DecodeError(&quot;...&quot;)</code>)</td></tr><tr><td><code>s[::2]</code>, any slice step</td><td>not supported</td><td>a loop or comprehension</td></tr><tr><td><code>x[1:3] = ...</code></td><td>no slice assignment</td><td>build a new list</td></tr><tr><td><code>del x[k]</code></td><td>no <code>del</code></td><td><code>d.pop(k)</code> / <code>lst.pop(i)</code></td></tr><tr><td>sets, <code>{x for ...}</code>, dict comprehensions, generator expressions</td><td>not supported</td><td>lists, dicts built in a loop</td></tr><tr><td><code>a = b = 0</code></td><td>no chained assignment</td><td>two statements</td></tr><tr><td><code>a = 1; b = 2</code></td><td>no <code>;</code></td><td>one statement per line</td></tr><tr><td><code>while … else</code>, <code>for … else</code></td><td>no loop <code>else</code></td><td>a flag variable</td></tr><tr><td><code>*args</code>, <code>**kwargs</code>, <code>f(*lst)</code></td><td>not supported</td><td>pass a list or dict</td></tr><tr><td><code>&quot;%d&quot; % n</code>, <code>&quot;{}&quot;.format(n)</code></td><td>neither</td><td>f-strings</td></tr><tr><td><code>f&quot;{x!r}&quot;</code>, <code>f&quot;{x=}&quot;</code></td><td>no conversions or <code>=</code></td><td><code>f&quot;{repr(x)}&quot;</code></td></tr><tr><td><code>print(a, end=&quot;&quot;)</code>, <code>sorted(xs, key=...)</code></td><td>builtins and methods take <strong>no keyword arguments</strong></td><td>build the whole line, then <code>print</code> it</td></tr><tr><td><code>&quot;é&quot;</code>, <code>&quot;\N{...}&quot;</code></td><td>no <code>\u</code>/<code>\N</code> escapes (SyntaxError)</td><td>put the character in the source (UTF-8), or <code>chr(0xE9)</code></td></tr><tr><td><code>obj.attr = v</code></td><td>no attribute assignment</td><td>dict item assignment</td></tr></tbody></table></div>
+<p>Missing builtins people reach for: <code>enumerate</code>, <code>zip</code>, <code>map</code>, <code>filter</code>, <code>any</code>, <code>all</code>, <code>round</code>, <code>list()</code>, <code>dict()</code>, <code>isinstance</code>, <code>hex</code>, <code>input</code>, <code>open</code>. Use <code>range(len(xs))</code> for <code>enumerate</code>, <code>int(x + 0.5)</code> or an f-string spec for rounding, <code>lst[0:]</code> to copy a list, <code>type(x) == &quot;int&quot;</code> for type tests, and <code>Stream</code> / <code>read_file</code> / <code>Path</code> for files. Missing methods: <code>str.rjust/ljust/zfill/ partition/index/title</code>, <code>list.insert/remove/sort/reverse</code>, <code>dict.items/update</code>. Use f-string alignment for padding (<code>f&quot;{s:&gt;8}&quot;</code>) and <code>sorted(xs)</code> for sorting.</p>
+<h3 id="things-that-behave-differently">Things that behave differently <a class="anchor" href="#things-that-behave-differently" aria-label="Link to this section">#</a></h3>
+<ul><li><strong>Integers are 64-bit.</strong> Overflow raises <code>OverflowError</code>; it never wraps and never grows into a bignum. <code>2 ** 63</code> raises.</li><li><strong><code>name &lt;&lt; expr</code> as a statement assigns.</strong> <code>n &lt;&lt; 3</code> on a line by itself <em>shifts <code>n</code> in place</em> (<code>n = n &lt;&lt; 3</code>). In Python that line does nothing. It exists for JSON (<a href="#s9-4">§9.4</a>), but it applies to ints too.</li><li><strong>Default arguments are evaluated on every call</strong>, in the module scope. So <code>def f(x, acc=[])</code> gets a fresh list each call (no shared-default bug), and a default can refer to globals but not to earlier parameters.</li><li><strong>Comprehension variables don't get their own scope.</strong> <code>[x for x in xs]</code> binds <code>x</code> in the enclosing function (or as a global at module level).</li><li><strong><code>&quot;\xHH&quot;</code> in a <code>str</code> is a raw byte</strong>, not code point U+00HH. Fine below <code>\x80</code>; above that you can create invalid UTF-8. Use <code>chr()</code> for non-ASCII.</li><li><strong><code>type(x)</code> returns a string</strong>: <code>&quot;int&quot;</code>, <code>&quot;str&quot;</code>, <code>&quot;list&quot;</code>, <code>&quot;KeyError&quot;</code>...</li><li><strong><code>dict.keys()</code> / <code>values()</code> return lists</strong> (copies), not views.</li><li><strong><code>range()</code> returns a real list.</strong> <code>range(10_000_000)</code> allocates it.</li><li><strong><code>str.upper/lower/isdigit/isalpha/isspace</code> are ASCII-only.</strong></li><li><strong>Names are checked before the program runs.</strong> A misspelled variable or function anywhere in the file is a compile error, even in code that would never execute.</li><li><strong>f-string fields can't contain the f-string's own quote character.</strong> <code>f&quot;{d[&quot;k&quot;]}&quot;</code> is an error; write <code>f&quot;{d[&#x27;k&#x27;]}&quot;</code>. Format specs are literal text: <code>f&quot;{x:{w}}&quot;</code> (a computed width) is not supported.</li></ul>
+<hr>
+<h2 id="s2">2. Running programs <a class="anchor" href="#s2" aria-label="Link to this section">#</a></h2>
+<pre class="lang-sh"><code>dolphin prog.dol [args...]      # run; calls main(*args) if main is defined
+dolphin --check prog.dol        # parse + resolve + analyze only (finds every NameError)
+dolphin --needs prog.dol        # what each function needs, and whether it can run in parallel
+dolphin --threads 1 prog.dol    # sequential reference execution
+dolphin --engine pcode prog.dol # p-code engine (same semantics, faster)
+dolphin -c prog.dol             # compile to prog.dcl; `dolphin prog.dcl` runs it
+dolphin --ast / --tokens / --disasm / --stats / --trace prog.dol</code></pre>
+<h3 id="program-structure">Program structure <a class="anchor" href="#program-structure" aria-label="Link to this section">#</a></h3>
+<ol><li>The whole file is parsed, every name is resolved, and the needs analysis runs. Any syntax error or undefined name stops here, before anything runs.</li><li>Module-level statements run top to bottom (they can print, assign globals, loop, catch exceptions, and so on).</li><li>If the module defined a function <code>main</code>, it is called with the command-line arguments, <strong>each as a <code>str</code></strong>. Too few arguments for <code>main</code>'s parameters (without defaults) is a <code>TypeError</code>. Extra ones are also a <code>TypeError</code>.</li><li>If <code>main</code> returns an <code>int</code>, that is the process exit code; otherwise 0.</li><li>An uncaught exception prints <code>file.dol:LINE: Kind: message</code> on stderr (after all earlier output has been flushed) and exits with 1.</li></ol>
+<pre class="lang-python"><code><span class="kw">def</span> main(path, limit=<span class="str">&quot;10&quot;</span>):      <span class="com"># dolphin prog.dol data.txt  /  dolphin prog.dol data.txt 50</span>
+    n = <span class="bi">int</span>(limit)
+    ...
+    <span class="kw">return</span> <span class="num">0</span></code></pre>
+<hr>
+<h2 id="s3">3. Lexical structure <a class="anchor" href="#s3" aria-label="Link to this section">#</a></h2>
+<h3 id="lines-and-indentation">Lines and indentation <a class="anchor" href="#lines-and-indentation" aria-label="Link to this section">#</a></h3>
+<ul><li>Blocks are defined by indentation, as in Python. <strong>Spaces only</strong>: a tab in indentation is a syntax error. Any width works, as long as a dedent returns to a width that was used before.</li><li>A block is either an indented suite or <strong>one simple statement</strong> on the same line: <code>if x &lt; 0: return 0</code>. (A compound statement like <code>if</code> can't be the one-liner.)</li><li>Inside <code>()</code>, <code>[]</code>, <code>{}</code> newlines and indentation are ignored, so expressions can span lines. A backslash at the end of a line also joins it to the next.</li><li><code>#</code> starts a comment that runs to the end of the line.</li><li>No semicolons.</li></ul>
+<h3 id="identifiers-and-keywords">Identifiers and keywords <a class="anchor" href="#identifiers-and-keywords" aria-label="Link to this section">#</a></h3>
+<p>Identifiers: ASCII letter or <code>_</code>, then letters, digits, <code>_</code>. Case-sensitive.</p>
+<p>Keywords:</p>
+<pre><code>def return if elif else while for in break continue pass try except as
+raise and or not True False None</code></pre>
+<p>Reserved, can't be used as names, not implemented yet:</p>
+<pre><code>lambda import from struct layout extern needs mut</code></pre>
+<p>Note that <code>needs</code> and <code>mut</code> are reserved, so they can't be variable names.</p>
+<h3 id="numbers">Numbers <a class="anchor" href="#numbers" aria-label="Link to this section">#</a></h3>
+<div class="table"><table><thead><tr><th>Form</th><th>Example</th><th>Type</th></tr></thead><tbody><tr><td>decimal</td><td><code>42</code>, <code>1_000_000</code></td><td>int</td></tr><tr><td>hex / binary / octal</td><td><code>0xFF</code>, <code>0b1010</code>, <code>0o755</code></td><td>int</td></tr><tr><td>float</td><td><code>3.14</code>, <code>.5</code>, <code>1.</code>, <code>1e-3</code>, <code>6.02E23</code></td><td>float</td></tr></tbody></table></div>
+<p>Underscores are digit separators anywhere in the digits. There are no negative literals: <code>-5</code> is unary minus applied to <code>5</code>. An integer literal above <code>9223372036854775807</code> is a syntax error.</p>
+<h3 id="strings-and-bytes">Strings and bytes <a class="anchor" href="#strings-and-bytes" aria-label="Link to this section">#</a></h3>
+<pre class="lang-python"><code><span class="str">&#x27;single&#x27;</span>   <span class="str">&quot;double&quot;</span>   <span class="str">&#x27;&#x27;&#x27;triple
+can span lines&#x27;&#x27;&#x27;</span>   <span class="str">&quot;&quot;&quot;also triple&quot;&quot;&quot;</span>
+<span class="str">r&quot;raw \n stays two characters&quot;</span>
+<span class="str">b&quot;bytes&quot;</span>   <span class="str">rb&quot;raw bytes&quot;</span>   <span class="str">br&quot;same&quot;</span>
+<span class="str">f&quot;formatted {x}&quot;</span>   <span class="str">rf&quot;raw formatted {x}&quot;</span>
+<span class="str">&quot;adjacent &quot;</span> <span class="str">&quot;literals &quot;</span> <span class="str">f&quot;concatenate {n}&quot;</span></code></pre>
+<ul><li>Prefixes (<code>b</code>, <code>r</code>, <code>f</code>, upper or lower case, up to two of them) go directly before the quote. <code>bf&quot;...&quot;</code> is an error.</li><li>Escapes: <code>\n \t \r \0 \\ \&#x27; \&quot; \xHH</code>, and backslash-newline (the newline is dropped). <strong>Any other escape is a syntax error</strong>, including <code>\u</code>, <code>\a</code>, <code>\b</code>, <code>\f</code>, <code>\v</code>. Raw strings keep backslashes as written.</li><li>A single-quoted string can't contain a raw newline; a triple-quoted one can.</li><li>Bytes literals may only contain ASCII in the source; use <code>\xHH</code> for the rest.</li><li>Adjacent string literals concatenate. If any piece is an f-string, the whole thing is one f-string.</li></ul>
+<hr>
+<h2 id="s4">4. Values and types <a class="anchor" href="#s4" aria-label="Link to this section">#</a></h2>
+<div class="table"><table><thead><tr><th>Type</th><th><code>type(x)</code></th><th>Mutable?</th><th>Notes</th></tr></thead><tbody><tr><td>None</td><td><code>&quot;None&quot;</code></td><td></td><td>the single value <code>None</code></td></tr><tr><td>bool</td><td><code>&quot;bool&quot;</code></td><td></td><td><code>True</code>, <code>False</code>; acts as 1/0 in arithmetic</td></tr><tr><td>int</td><td><code>&quot;int&quot;</code></td><td></td><td>signed 64-bit; overflow raises <code>OverflowError</code></td></tr><tr><td>float</td><td><code>&quot;float&quot;</code></td><td></td><td>IEEE double; prints like Python (<code>0.1</code>, <code>2.0</code>, <code>1e+20</code>)</td></tr><tr><td>str</td><td><code>&quot;str&quot;</code></td><td>no</td><td>UTF-8 text; length and indices count <strong>code points</strong></td></tr><tr><td>bytes</td><td><code>&quot;bytes&quot;</code></td><td>no</td><td>raw bytes; indexing gives an int 0..255</td></tr><tr><td>list</td><td><code>&quot;list&quot;</code></td><td><strong>yes</strong></td><td>shared by reference</td></tr><tr><td>dict</td><td><code>&quot;dict&quot;</code></td><td><strong>yes</strong></td><td>shared by reference; keeps insertion order</td></tr><tr><td>function</td><td><code>&quot;function&quot;</code></td><td></td><td>a <code>def</code>; can be passed around and called</td></tr><tr><td>builtin</td><td><code>&quot;builtin&quot;</code></td><td></td><td>e.g. <code>len</code></td></tr><tr><td>exception class</td><td><code>&quot;exception class&quot;</code></td><td></td><td>e.g. <code>ValueError</code></td></tr><tr><td>exception</td><td>its class name</td><td></td><td>what <code>except E as e</code> binds</td></tr><tr><td>Path</td><td><code>&quot;Path&quot;</code></td><td>no</td><td>a filesystem path, <a href="#s9-7">§9.7</a></td></tr><tr><td>Stream, Response, JSON, Listener, Archive</td><td>same</td><td></td><td>I/O objects, <a href="#s9">§9</a></td></tr></tbody></table></div>
+<h3 id="references-and-copying">References and copying <a class="anchor" href="#references-and-copying" aria-label="Link to this section">#</a></h3>
+<p>Assignment never copies. <code>b = a</code> makes both names refer to the same list or dict, so <code>b.append(1)</code> is visible through <code>a</code>. Strings, bytes and numbers can't change, so sharing them is invisible.</p>
+<ul><li>Copy a list: <code>copy = lst[0:]</code> (or <code>lst[:]</code>).</li><li>Copy a dict: there's no <code>copy()</code>; build one: <code>c = {}</code> then <code>for k in d: c[k] = d[k]</code>.</li></ul>
+<h3 id="truthiness">Truthiness <a class="anchor" href="#truthiness" aria-label="Link to this section">#</a></h3>
+<p>False: <code>None</code>, <code>False</code>, <code>0</code>, <code>0.0</code>, <code>&quot;&quot;</code>, <code>b&quot;&quot;</code>, <code>[]</code>, <code>{}</code>. Everything else is true, including every Stream, function and exception.</p>
+<h3 id="equality">Equality <a class="anchor" href="#equality" aria-label="Link to this section">#</a></h3>
+<ul><li>Numbers compare by value across int, float and bool: <code>1 == 1.0 == True</code>. Two ints compare exactly (no rounding through double).</li><li>Lists are equal if they have equal elements in the same order. Dicts are equal if they have the same keys mapping to equal values (order ignored).</li><li><code>str</code> and <code>bytes</code> are never equal to each other: <code>&quot;a&quot; != b&quot;a&quot;</code>.</li><li>Different types are simply unequal (no error).</li></ul>
+<h3 id="ordering">Ordering (<code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>) <a class="anchor" href="#ordering" aria-label="Link to this section">#</a></h3>
+<p>Allowed between numbers (int/float/bool mixed), between two <code>str</code> (code point order), and between two <code>bytes</code>. Anything else, including <code>None</code> or lists, raises <code>TypeError</code>. Comparisons involving NaN are false.</p>
+<h3 id="dict-keys">Dict keys <a class="anchor" href="#dict-keys" aria-label="Link to this section">#</a></h3>
+<p>Keys can be <code>None</code>, bool, int, float, str, bytes, functions and exception classes. A list or dict as a key is <code>TypeError: unhashable type</code>. Numbers that are equal are the <strong>same key</strong>: <code>d[1]</code>, <code>d[1.0]</code> and <code>d[True]</code> are one entry. Iteration order is insertion order; reassigning an existing key keeps its position.</p>
+<hr>
+<h2 id="s5">5. Expressions <a class="anchor" href="#s5" aria-label="Link to this section">#</a></h2>
+<h3 id="operator-precedence-lowest-to-highest">Operator precedence (lowest to highest) <a class="anchor" href="#operator-precedence-lowest-to-highest" aria-label="Link to this section">#</a></h3>
+<div class="table"><table><thead><tr><th>Level</th><th>Operators</th><th>Notes</th></tr></thead><tbody><tr><td>1</td><td><code>or</code></td><td>short-circuit; returns an operand, not a bool</td></tr><tr><td>2</td><td><code>and</code></td><td>short-circuit; returns an operand</td></tr><tr><td>3</td><td><code>not</code></td><td>prefix</td></tr><tr><td>4</td><td><code>==</code> <code>!=</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>in</code> <code>not in</code></td><td>chain: <code>a &lt; b &lt; c</code> means <code>a &lt; b and b &lt; c</code></td></tr><tr><td>5</td><td><code>|</code></td><td></td></tr><tr><td>6</td><td><code>^</code></td><td></td></tr><tr><td>7</td><td><code>&amp;</code></td><td></td></tr><tr><td>8</td><td><code>&lt;&lt;</code> <code>&gt;&gt;</code></td><td></td></tr><tr><td>9</td><td><code>+</code> <code>-</code></td><td></td></tr><tr><td>10</td><td><code>*</code> <code>/</code> <code>//</code> <code>%</code></td><td></td></tr><tr><td>11</td><td>unary <code>-</code> <code>+</code> <code>~</code></td><td><code>-2 ** 2 == -4</code></td></tr><tr><td>12</td><td><code>**</code></td><td>right-associative: <code>2 ** 3 ** 2 == 512</code></td></tr><tr><td>13</td><td>call <code>f(x)</code>, index <code>a[i]</code>, slice <code>a[i:j]</code>, attribute <code>a.b</code></td><td>left to right</td></tr></tbody></table></div>
+<p>Parentheses group. <code>(a, b)</code> is an error ("tuples are not supported yet").</p>
+<h3 id="arithmetic">Arithmetic <a class="anchor" href="#arithmetic" aria-label="Link to this section">#</a></h3>
+<div class="table"><table><thead><tr><th>Expression</th><th>Result</th></tr></thead><tbody><tr><td><code>int + - * int</code></td><td>int, <code>OverflowError</code> on overflow</td></tr><tr><td>anything with a float</td><td>float</td></tr><tr><td><code>a / b</code></td><td><strong>always float</strong> (<code>7 / 2 == 3.5</code>, <code>4 / 2 == 2.0</code>)</td></tr><tr><td><code>a // b</code></td><td>floor division: <code>7 // 2 == 3</code>, <code>-7 // 2 == -4</code> (float if either is float)</td></tr><tr><td><code>a % b</code></td><td>result takes the divisor's sign: <code>-7 % 2 == 1</code></td></tr><tr><td><code>int ** int</code></td><td>int if the exponent is ≥ 0, float if negative (<code>2 ** -1 == 0.5</code>)</td></tr><tr><td><code>x / 0</code>, <code>x // 0</code>, <code>x % 0</code></td><td><code>ZeroDivisionError</code>, for floats too</td></tr><tr><td><code>&amp; | ^ ~ &lt;&lt; &gt;&gt;</code></td><td>ints only. <code>&lt;&lt;</code> raises <code>OverflowError</code> if bits are lost; negative shift counts raise <code>ValueError</code></td></tr><tr><td><code>str + str</code>, <code>bytes + bytes</code>, <code>list + list</code></td><td>concatenation (new object)</td></tr><tr><td><code>str * int</code>, <code>bytes * int</code>, <code>list * int</code> (either order)</td><td>repetition; a negative count gives empty</td></tr><tr><td><code>True + 1</code></td><td><code>2</code> (bools are ints in arithmetic)</td></tr></tbody></table></div>
+<p>Mixing <code>str</code> and numbers (<code>&quot;a&quot; + 1</code>) is a <code>TypeError</code>. Convert with <code>str()</code>.</p>
+<h3 id="membership-in-not-in">Membership: <code>in</code> / <code>not in</code> <a class="anchor" href="#membership-in-not-in" aria-label="Link to this section">#</a></h3>
+<div class="table"><table><thead><tr><th>Right side</th><th>Left side</th><th>Meaning</th></tr></thead><tbody><tr><td>str</td><td>str</td><td>substring test (<code>&quot;KT&quot; in g</code>)</td></tr><tr><td>bytes</td><td>bytes or int</td><td>sub-bytes, or a byte value</td></tr><tr><td>list</td><td>anything</td><td>some element <code>==</code> it</td></tr><tr><td>dict</td><td>a valid key</td><td>key is present</td></tr></tbody></table></div>
+<h3 id="indexing-and-slicing">Indexing and slicing <a class="anchor" href="#indexing-and-slicing" aria-label="Link to this section">#</a></h3>
+<pre class="lang-python"><code>s[<span class="num">0</span>]   s[-<span class="num">1</span>]          <span class="com"># str: a 1-character str; bytes: an int; list: the element</span>
+d[<span class="str">&quot;key&quot;</span>]              <span class="com"># dict: KeyError if missing (use d.get(&quot;key&quot;) for None)</span>
+s[<span class="num">2</span>:<span class="num">5</span>]  s[:<span class="num">3</span>]  s[<span class="num">3</span>:]  s[-<span class="num">2</span>:]  s[:]   <span class="com"># new str / bytes / list</span></code></pre>
+<ul><li>Negative indices count from the end. An out-of-range index raises <code>IndexError</code>.</li><li>Slices take <code>lo</code> and <code>hi</code> only (no step). They clamp to the sequence and never raise: <code>&quot;abc&quot;[1:100] == &quot;bc&quot;</code>, <code>&quot;abc&quot;[5:9] == &quot;&quot;</code>.</li><li>String indices and slices count code points, not bytes.</li><li>Assignment: <code>lst[i] = v</code> and <code>d[k] = v</code> only. No slice assignment, and str and bytes can't be modified.</li></ul>
+<h3 id="calls">Calls <a class="anchor" href="#calls" aria-label="Link to this section">#</a></h3>
+<pre class="lang-python"><code>f(<span class="num">1</span>, <span class="num">2</span>)          f(<span class="num">1</span>, b=<span class="num">2</span>)          f(a=<span class="num">1</span>, b=<span class="num">2</span>)</code></pre>
+<ul><li>User functions take positional arguments, then keyword arguments. Duplicates, unknown names and missing arguments are <code>TypeError</code>.</li><li><strong>Builtins and methods take positional arguments only.</strong></li><li>Calling a function stored in a variable works, but the analyzer can't see through it, so the caller is treated as needing everything (a warning is printed, and that function won't run in parallel).</li></ul>
+<h3 id="list-comprehensions">List comprehensions <a class="anchor" href="#list-comprehensions" aria-label="Link to this section">#</a></h3>
+<pre class="lang-python"><code>[expr <span class="kw">for</span> name <span class="kw">in</span> iterable]
+[expr <span class="kw">for</span> name <span class="kw">in</span> iterable <span class="kw">if</span> condition]</code></pre>
+<p>One <code>for</code> and at most one <code>if</code>. No nesting of <code>for</code>s inside one comprehension (nest whole comprehensions instead). When <code>expr</code> is a call to a pure function, the comprehension becomes a parallel map (<a href="#s10">§10</a>).</p>
+<h3 id="f-strings">f-strings <a class="anchor" href="#f-strings" aria-label="Link to this section">#</a></h3>
+<pre class="lang-python"><code><span class="str">f&quot;{station:&lt;5} {temp:6.1f} {count:,} {flag}&quot;</span></code></pre>
+<p>Each <code>{...}</code> holds an expression, optionally followed by <code>:spec</code>. <code>{{</code> and <code>}}</code> are literal braces. Without a spec, the value is shown as <code>str()</code> would show it. The spec is the format mini-language below.</p>
+<h3 id="format-spec">Format spec <a class="anchor" href="#format-spec" aria-label="Link to this section">#</a></h3>
+<p><code>[[fill]align][sign][0][width][,][.precision][type]</code></p>
+<div class="table"><table><thead><tr><th>Part</th><th>Values</th></tr></thead><tbody><tr><td>align</td><td><code>&lt;</code> left, <code>&gt;</code> right, <code>^</code> center. Default: numbers right, text left</td></tr><tr><td>fill</td><td>any one character before the align: <code>f&quot;{x:*^9}&quot;</code></td></tr><tr><td>sign</td><td><code>+</code> always, <code>-</code> negatives only (default), space: space for positives</td></tr><tr><td><code>0</code></td><td>zero-pad numbers after the sign: <code>f&quot;{7:03d}&quot; == &quot;007&quot;</code></td></tr><tr><td>width</td><td>minimum width in code points</td></tr><tr><td><code>,</code></td><td>thousands separators: <code>f&quot;{1234567:,}&quot; == &quot;1,234,567&quot;</code></td></tr><tr><td>.precision</td><td>digits after the point (<code>f</code>, <code>e</code>, <code>%</code>), significant digits (<code>g</code>), max characters (<code>s</code>)</td></tr><tr><td>type</td><td><code>d</code> <code>x</code> <code>X</code> <code>o</code> <code>b</code> for ints; <code>f</code> <code>F</code> <code>e</code> <code>E</code> <code>g</code> <code>G</code> <code>%</code> for numbers; <code>s</code> for strings</td></tr></tbody></table></div>
+<p>A float with a precision but no type uses <code>g</code>. Using <code>d</code> on a float, or <code>f</code> on a string, raises <code>ValueError</code>.</p>
+<pre class="lang-python"><code><span class="str">f&quot;{3.14159:.2f}&quot;</span>   <span class="com"># 3.14</span>
+<span class="str">f&quot;{3.14159:8.3f}&quot;</span>  <span class="com"># &#x27;   3.142&#x27;</span>
+<span class="str">f&quot;{42:05d}&quot;</span>        <span class="com"># 00042</span>
+<span class="str">f&quot;{255:x}&quot;</span>         <span class="com"># ff</span>
+<span class="str">f&quot;{0.5:%}&quot;</span>         <span class="com"># 50.000000%</span>
+<span class="str">f&quot;{-3:+d}&quot;</span>         <span class="com"># -3</span>
+<span class="str">f&quot;{&#x27;s&#x27;:&lt;4}|&quot;</span>       <span class="com"># &#x27;s   |&#x27;</span></code></pre>
+<hr>
+<h2 id="s6">6. Statements <a class="anchor" href="#s6" aria-label="Link to this section">#</a></h2>
+<h3 id="s6-1">6.1 The statement list <a class="anchor" href="#s6-1" aria-label="Link to this section">#</a></h3>
+<pre class="lang-python"><code>x = expr                      <span class="com"># assignment: target is a name, a[i], or d[k]</span>
+x: <span class="bi">int</span> = expr                 <span class="com"># annotation (parsed, not enforced); needs a value</span>
+x += expr                     <span class="com"># also -= *= /= //= %= **= &amp;= |= ^= &lt;&lt;= &gt;&gt;=</span>
+name &lt;&lt; expr                  <span class="com"># assigns, see §1 and §9.4</span>
+expr                          <span class="com"># expression statement (usually a call)</span>
+<span class="kw">pass</span>
+<span class="kw">break</span>
+<span class="kw">continue</span>
+<span class="kw">return</span> [expr]                 <span class="com"># no value: returns None</span>
+<span class="kw">raise</span> [expr]                  <span class="com"># §8</span>
+
+<span class="kw">if</span> cond:  ...
+<span class="kw">elif</span> cond: ...
+<span class="kw">else</span>: ...
+
+<span class="kw">while</span> cond: ...
+
+<span class="kw">for</span> name <span class="kw">in</span> iterable: ...     <span class="com"># exactly one name</span>
+
+<span class="kw">def</span> name(params) -&gt; ret: ...  <span class="com"># §7</span>
+
+<span class="kw">try</span>: ...
+<span class="kw">except</span> ClassName <span class="kw">as</span> e: ...
+<span class="kw">except</span> ClassName: ...
+<span class="kw">except</span>: ...                   <span class="com"># catches everything</span></code></pre>
+<p><code>for</code> iterates over:</p>
+<div class="table"><table><thead><tr><th>Iterable</th><th>Yields</th></tr></thead><tbody><tr><td>list</td><td>its elements (a snapshot taken when the loop starts)</td></tr><tr><td>dict</td><td>its keys in insertion order (also a snapshot)</td></tr><tr><td>str</td><td>1-character strings (code points)</td></tr><tr><td>bytes</td><td>ints 0..255</td></tr></tbody></table></div>
+<p>Changing a list or dict while looping over it doesn't affect the loop. The loop variable keeps its last value after the loop.</p>
+<h3 id="s6-2">6.2 Scope <a class="anchor" href="#s6-2" aria-label="Link to this section">#</a></h3>
+<p>There are exactly two levels: the module (globals) and the function (locals).</p>
+<ul><li><strong>Inside a function, any name assigned anywhere in it is local throughout it.</strong> That includes <code>for</code> variables, comprehension variables, <code>except … as</code> names and nested <code>def</code>s. Reading a local before it's assigned raises <code>UnboundLocalError</code>.</li><li>Everything else in a function refers to the module. Module-level names are visible from every function, including ones defined further down the file.</li><li><p><strong>There is no <code>global</code> statement</strong>, so a function can't rebind a global:</p>
+<pre class="lang-python"><code>COUNT = <span class="num">0</span>
+<span class="kw">def</span> bump():
+    COUNT += <span class="num">1</span>      <span class="com"># UnboundLocalError: COUNT is local to bump</span></code></pre>
+<p>To share state, either return values (preferred, and it keeps the function parallel), or put the state in a global list or dict and mutate it (<code>STATS[&quot;count&quot;] += 1</code>), which works but makes the function inline-only (<a href="#s10">§10</a>).</p></li><li>Reading a global before the module code has assigned it raises <code>NameError: name &#x27;X&#x27; is not defined yet</code>.</li><li>Nested <code>def</code>s are allowed, but <strong>no closures</strong>: a nested function that reads a local of the function around it is a compile error. Pass the value in.</li><li>Undefined names are compile errors (<code>--check</code> finds them all).</li></ul>
+<hr>
+<h2 id="s7">7. Functions <a class="anchor" href="#s7" aria-label="Link to this section">#</a></h2>
+<pre class="lang-python"><code><span class="kw">def</span> decode(line: <span class="bi">str</span>, strict=<span class="const">False</span>, width: <span class="bi">int</span> = <span class="num">80</span>) -&gt; dict:
+    ...
+    <span class="kw">return</span> result</code></pre>
+<ul><li>Parameters may have annotations and defaults. Annotations, including the <code>-&gt; type</code>, are parsed and kept but <strong>not checked</strong> yet.</li><li>A parameter without a default can't follow one with a default.</li><li>Defaults are evaluated on every call, in the module scope.</li><li>Falling off the end, or a bare <code>return</code>, returns <code>None</code>.</li><li>Functions are values: <code>handler = decode</code> then <code>handler(x)</code> works (<a href="#s5">§5</a> Calls explains why you might not want to).</li><li>Recursion depth is limited to 1000 calls (<code>RecursionError</code>).</li><li>Defining two functions with the same name is allowed (the later one wins when it runs), but the name stops being statically known, which costs analysis precision. Don't.</li></ul>
+<hr>
+<h2 id="s8">8. Exceptions <a class="anchor" href="#s8" aria-label="Link to this section">#</a></h2>
+<h3 id="hierarchy">Hierarchy <a class="anchor" href="#hierarchy" aria-label="Link to this section">#</a></h3>
+<pre><code>Error
+├── ValueError
+│   └── JSONError
+├── TypeError
+├── IndexError
+├── KeyError
+├── NameError
+│   └── UnboundLocalError
+├── AttributeError
+├── ZeroDivisionError
+├── OverflowError
+├── IOError
+├── DecodeError
+├── RecursionError
+├── RuntimeError
+└── SyntaxError</code></pre>
+<p><code>except Error</code> catches everything that can be raised. <code>DecodeError</code> is meant for your own parsers ("this input is malformed"); <code>bytes.decode()</code> also raises it for invalid UTF-8.</p>
+<h3 id="raising">Raising <a class="anchor" href="#raising" aria-label="Link to this section">#</a></h3>
+<pre class="lang-python"><code><span class="kw">raise</span> <span class="exc">ValueError</span>(<span class="str">&quot;bad wind group: &quot;</span> + g)   <span class="com"># class called with one argument (converted with str)</span>
+<span class="kw">raise</span> <span class="exc">DecodeError</span>                          <span class="com"># no message</span>
+<span class="kw">raise</span>                                      <span class="com"># inside an except block: re-raise the current one</span></code></pre>
+<p>Only builtin exception classes exist; you can't define new ones. Exception constructors take at most one argument.</p>
+<h3 id="catching">Catching <a class="anchor" href="#catching" aria-label="Link to this section">#</a></h3>
+<pre class="lang-python"><code><span class="kw">try</span>:
+    v = <span class="bi">int</span>(field)
+<span class="kw">except</span> <span class="exc">ValueError</span> <span class="kw">as</span> e:
+    <span class="bi">print</span>(e.kind, e.message)    <span class="com"># &quot;ValueError&quot;, &quot;invalid literal for int(): &#x27;x&#x27;&quot;</span>
+    v = <span class="const">None</span></code></pre>
+<ul><li>Clauses are tried in order; the first whose class matches (the error's class or any ancestor) runs. A bare <code>except:</code> matches anything.</li><li><code>e.kind</code> is the class name, <code>e.message</code> the message. <code>str(e)</code> is the message. <code>type(e)</code> is the class name too.</li><li>If nothing matches, the exception keeps propagating.</li><li><strong>A failed assignment leaves its target untouched.</strong> In <code>x = f()</code>, if <code>f</code> raises, <code>x</code> keeps whatever value it had. Handlers can rely on that.</li><li>There's no <code>finally</code> and no <code>else</code> clause.</li></ul>
+<h3 id="errors-the-runtime-raises">Errors the runtime raises <a class="anchor" href="#errors-the-runtime-raises" aria-label="Link to this section">#</a></h3>
+<div class="table"><table><thead><tr><th>Situation</th><th>Exception</th></tr></thead><tbody><tr><td><code>int(&quot;abc&quot;)</code>, <code>float(&quot;x&quot;)</code></td><td><code>ValueError</code></td></tr><tr><td>wrong argument types, <code>&quot;a&quot; + 1</code>, calling a non-function</td><td><code>TypeError</code></td></tr><tr><td>list/str/bytes index out of range, <code>be_u32</code> past the end</td><td><code>IndexError</code></td></tr><tr><td>missing dict key with <code>d[k]</code></td><td><code>KeyError</code> (message is the key's repr)</td></tr><tr><td><code>x.nosuchmethod</code></td><td><code>AttributeError</code></td></tr><tr><td>int overflow</td><td><code>OverflowError</code></td></tr><tr><td>file or socket failure</td><td><code>IOError</code></td></tr><tr><td>invalid UTF-8 in <code>bytes.decode()</code></td><td><code>DecodeError</code></td></tr></tbody></table></div>
+<hr>
+<h2 id="s9">9. Builtins and methods <a class="anchor" href="#s9" aria-label="Link to this section">#</a></h2>
+<h3 id="s9-1">9.1 Builtin functions <a class="anchor" href="#s9-1" aria-label="Link to this section">#</a></h3>
+<div class="table"><table><thead><tr><th>Function</th><th>Meaning</th></tr></thead><tbody><tr><td><code>print(a, b, ...)</code></td><td><code>str()</code> of each, space-separated, plus a newline. <code>print()</code> prints an empty line. No <code>end=</code>/<code>sep=</code>.</td></tr><tr><td><code>len(x)</code></td><td>str (code points), bytes, list, dict</td></tr><tr><td><code>range(stop)</code>, <code>range(start, stop[, step])</code></td><td>a <strong>list</strong> of ints; step 0 raises <code>ValueError</code></td></tr><tr><td><code>str(x)</code></td><td>text form (<code>str()</code> with no argument is <code>&quot;&quot;</code>). <code>str(b&quot;x&quot;)</code> is <code>&quot;b&#x27;x&#x27;&quot;</code>; use <code>.decode()</code> for text</td></tr><tr><td><code>repr(x)</code></td><td>quoted form: <code>repr(&quot;a&quot;) == &quot;&#x27;a&#x27;&quot;</code></td></tr><tr><td><code>int(x)</code></td><td>from int, bool, float (truncates toward zero), or str</td></tr><tr><td><code>int(s, base)</code></td><td>str in a base; <code>int(&quot;ff&quot;, 16) == 255</code>, <code>int(&quot;0x1f&quot;, 16) == 31</code></td></tr><tr><td><code>float(x)</code></td><td>from a number or str (<code>&quot;nan&quot;</code>, <code>&quot;inf&quot;</code> accepted)</td></tr><tr><td><code>bool(x)</code></td><td>truthiness</td></tr><tr><td><code>abs(x)</code></td><td>int or float</td></tr><tr><td><code>min(a, b, ...)</code>, <code>min(list)</code>; <code>max</code> likewise</td><td>numbers or strings, not mixed; empty list raises <code>ValueError</code></td></tr><tr><td><code>sum(list)</code></td><td>numbers; int unless a float is involved</td></tr><tr><td><code>sorted(list)</code>, <code>sorted(dict)</code></td><td>new ascending list (dict: its keys); all numbers or all strings; stable. No <code>key</code>/<code>reverse</code></td></tr><tr><td><code>ord(c)</code>, <code>chr(n)</code></td><td>code point of a 1-character str, and back</td></tr><tr><td><code>type(x)</code></td><td>type name as a str</td></tr><tr><td><code>read_file(path)</code></td><td>the whole file as <strong>bytes</strong> (<code>IOError</code> if it can't be read)</td></tr><tr><td><code>array(n[, fill])</code></td><td>a list of <code>n</code> copies of <code>fill</code> (default <code>None</code>), allocated once. Same as <code>[fill] * n</code>. A list or dict <code>fill</code> is shared by every slot, as in Python. See <a href="#s10">§10</a> for filling it in parallel</td></tr><tr><td><code>compress(data, format[, level])</code>, <code>decompress(data[, format])</code>, <code>compressors()</code></td><td><a href="#s9-8">§9.8</a></td></tr><tr><td><code>Path(...)</code>, <code>Stream(target)</code>, <code>JSON([x])</code>, <code>Listener(...)</code>, <code>Archive(path[, mode])</code></td><td>objects, below</td></tr></tbody></table></div>
+<p><code>int(s)</code> and <code>float(s)</code> accept surrounding whitespace but nothing else extra: <code>int(&quot; 42 &quot;)</code> works, <code>int(&quot;42KT&quot;)</code> raises <code>ValueError</code>. <code>int(&quot;012&quot;)</code> is 12.</p>
+<h3 id="s9-2">9.2 Binary decoding (big-endian, bounds-checked) <a class="anchor" href="#s9-2" aria-label="Link to this section">#</a></h3>
+<p>All take <code>(buf: bytes, offset: int)</code> and raise <code>IndexError</code> with the offset and buffer size if the read runs past the end.</p>
+<div class="table"><table><thead><tr><th>Function</th><th>Reads</th></tr></thead><tbody><tr><td><code>be_u8</code>, <code>be_u16</code>, <code>be_u32</code>, <code>be_u64</code></td><td>unsigned ints (<code>be_u64</code> raises <code>OverflowError</code> above 2^63−1)</td></tr><tr><td><code>be_i16sm</code>, <code>be_i32sm</code></td><td>sign-magnitude ints (GRIB style: top bit is the sign)</td></tr><tr><td><code>be_f32</code>, <code>be_f64</code></td><td>IEEE floats</td></tr><tr><td><code>bits(buf, bit_offset, nbits)</code></td><td>unsigned big-endian bit field, <code>nbits</code> 0..63</td></tr></tbody></table></div>
+<p><code>examples/grib_ls.dol</code> uses all of these.</p>
+<h3 id="s9-3">9.3 Methods <a class="anchor" href="#s9-3" aria-label="Link to this section">#</a></h3>
+<p><strong>str</strong> (returns new strings; the original never changes)</p>
+<div class="table"><table><thead><tr><th>Method</th><th>Notes</th></tr></thead><tbody><tr><td><code>upper()</code>, <code>lower()</code></td><td>ASCII only</td></tr><tr><td><code>strip([chars])</code>, <code>lstrip([chars])</code>, <code>rstrip([chars])</code></td><td>default: whitespace. <code>chars</code> is a set of (ASCII) characters</td></tr><tr><td><code>split()</code></td><td>on runs of whitespace, no empty pieces</td></tr><tr><td><code>split(sep)</code></td><td>on exact <code>sep</code>; keeps empty pieces (<code>&quot;a,,b&quot;.split(&quot;,&quot;) == [&quot;a&quot;, &quot;&quot;, &quot;b&quot;]</code>). No <code>maxsplit</code></td></tr><tr><td><code>sep.join(list_of_str)</code></td><td></td></tr><tr><td><code>startswith(s)</code>, <code>endswith(s)</code></td><td>one string, not a tuple</td></tr><tr><td><code>find(s)</code></td><td>code point index or -1. No start argument</td></tr><tr><td><code>count(s)</code></td><td>non-overlapping occurrences</td></tr><tr><td><code>replace(old, new)</code></td><td>all occurrences; empty <code>old</code> raises</td></tr><tr><td><code>isdigit()</code>, <code>isalpha()</code>, <code>isspace()</code></td><td>ASCII; false for <code>&quot;&quot;</code></td></tr><tr><td><code>encode()</code></td><td>UTF-8 bytes</td></tr></tbody></table></div>
+<p><strong>bytes</strong>: <code>decode()</code> (UTF-8, <code>DecodeError</code> if invalid), <code>find(sub[, start])</code> (byte offset or -1), <code>startswith(b)</code>, <code>endswith(b)</code>, <code>hex()</code>.</p>
+<p><strong>list</strong>: <code>append(x)</code>, <code>extend(iterable)</code>, <code>pop([i])</code> (default last), <code>index(x)</code> (<code>ValueError</code> if absent), <code>count(x)</code>.</p>
+<p><strong>dict</strong>: <code>get(k[, default])</code> (default <code>None</code>), <code>pop(k[, default])</code> (removes; <code>KeyError</code> without a default), <code>keys()</code>, <code>values()</code> (both lists).</p>
+<p><strong>Path</strong>, <strong>Stream</strong>, <strong>Archive</strong>: see <a href="#s9-5">§9.5</a>, <a href="#s9-7">§9.7</a> and <a href="#s9-9">§9.9</a>.</p>
+<p>Exception values have the fields <code>kind</code> and <code>message</code>.</p>
+<h3 id="s9-4">9.4 JSON <a class="anchor" href="#s9-4" aria-label="Link to this section">#</a></h3>
+<p><code>JSON</code> is an immutable document. <code>JSON()</code> is null; <code>JSON(x)</code> loads <code>x</code>.</p>
+<pre class="lang-python"><code>j = <span class="bi">JSON</span>()
+j &lt;&lt; text                 <span class="com"># parse a str; JSONError (a ValueError) with line/column if malformed</span>
+j &lt;&lt; {<span class="str">&quot;stn&quot;</span>: <span class="str">&quot;KBCB&quot;</span>, <span class="str">&quot;t&quot;</span>: <span class="num">14.5</span>}   <span class="com"># or load a dict / list / scalar</span>
+d &lt;&lt; j                    <span class="com"># d = j.value(): dict, list or scalar (d needn&#x27;t exist yet)</span>
+j.toString()              <span class="com"># compact text</span>
+j.prettyPrint()           <span class="com"># indented two spaces</span></code></pre>
+<p>Keys must be strings and come out sorted. Bytes become <code>data:&lt;mime&gt;;base64,...</code> strings and turn back into bytes when read. NaN or infinity raises <code>ValueError</code>. Details: <code>src/dolphin/README.md</code>, section JSON.</p>
+<h3 id="s9-5">9.5 Stream: files and network <a class="anchor" href="#s9-5" aria-label="Link to this section">#</a></h3>
+<p><code>Stream(target)</code> is the one I/O object. The target decides what it is:</p>
+<div class="table"><table><thead><tr><th>Target</th><th>Kind</th><th>Needs</th></tr></thead><tbody><tr><td><code>&quot;path&quot;</code>, <code>&quot;file://path&quot;</code> or a <code>Path</code></td><td>file, <strong>opened read-only immediately</strong></td><td>IO</td></tr><tr><td><code>&quot;http://...&quot;</code>, <code>&quot;https://...&quot;</code></td><td>HTTP: GET on the first read, POST on write</td><td>Network</td></tr><tr><td><code>&quot;tcp://host:port&quot;</code>, <code>&quot;unix:///path&quot;</code></td><td>connected socket</td><td>Network</td></tr></tbody></table></div>
+<pre class="lang-python"><code>f = <span class="bi">Stream</span>(<span class="str">&quot;obs.txt&quot;</span>)
+<span class="kw">if</span> <span class="kw">not</span> f.valid:                 <span class="com"># opening never raises: check valid / error</span>
+    <span class="bi">print</span>(<span class="str">&quot;cannot open:&quot;</span>, f.error)
+    <span class="kw">return</span> <span class="num">1</span>
+line = f.readline()             <span class="com"># bytes including the &quot;\n&quot;; b&quot;&quot; at end of file</span>
+chunk = f.read(<span class="num">4096</span>)            <span class="com"># up to n bytes; b&quot;&quot; at end of file</span>
+rest = f.read()                 <span class="com"># everything that&#x27;s left</span>
+f.close()
+
+out = <span class="bi">Stream</span>(<span class="str">&quot;result.txt&quot;</span>)      <span class="com"># invalid until opened for writing:</span>
+out.open(<span class="str">&quot;wc&quot;</span>)                  <span class="com"># r, rw, wc (create/truncate), a (append). Returns the new valid</span>
+out.write(<span class="str">&quot;text\n&quot;</span>)             <span class="com"># str or bytes; returns the byte count</span>
+out.seek(<span class="num">0</span>, <span class="num">0</span>); out.tell()      <span class="com"># files only (IOError on pipes and sockets)</span>
+
+n = <span class="bi">Stream</span>(<span class="str">&quot;obs.txt&quot;</span>).count_lines()   <span class="com"># how many lines readline() would return</span></code></pre>
+<p><code>count_lines()</code> counts every <code>&quot;\n&quot;</code>, plus a last line that doesn't end with one (so <code>&quot;a\nb&quot;</code> is 2 lines and <code>&quot;&quot;</code> is 0). A file is counted from its start however much of it has been read, and the read position is left where it was. It reads in 64 KB blocks without building any strings, so a million-line file takes milliseconds. On an HTTP stream it counts the rest of the body; on a socket it raises <code>IOError</code> (a socket has no end to count to).</p>
+<ul><li>Fields: <code>valid</code>, <code>error</code>, <code>code</code> (HTTP status), <code>seekable</code>, <code>timeout</code>, <code>name</code>. Reading a field never raises.</li><li>Needs: a string-literal target or <code>Stream(Path(...))</code> is known (IO for a file, Network otherwise). A target computed any other way, such as <code>Stream(d / &quot;x.txt&quot;)</code> or a variable, counts as <code>IO,Network</code>. That's safe, just less precise.</li><li>An operation on an invalid stream, or a failing one, raises <code>IOError</code>.</li><li><code>s.set_timeout(seconds)</code> for sockets and HTTP (default 30).</li><li>An HTTP <code>write(dict)</code> posts form fields and returns a <code>Response</code> with <code>ready</code> (never blocks) and <code>code</code>, <code>body</code>, <code>valid</code>, <code>error</code> (these wait).</li></ul>
+<h3 id="s9-6">9.6 Listener: servers <a class="anchor" href="#s9-6" aria-label="Link to this section">#</a></h3>
+<p><code>Listener(port)</code> / <code>Listener(&quot;tcp://host:port&quot;)</code> / <code>Listener(&quot;unix:///path&quot;)</code>, configure (<code>bind</code>, <code>threads</code>, <code>per_connection</code>, <code>limit</code>, <code>set_timeout</code>, <code>drain</code>), then <code>start(handler)</code> and <code>wait()</code>. Each connection calls <code>handler(conn)</code> with a connected <code>Stream</code> on a worker thread. A handler that might modify a global list or dict is refused at <code>start()</code> (<code>ValueError</code>). Full description in <code>src/dolphin/README.md</code>; example in <code>examples/echo_server.dol</code>.</p>
+<h3 id="s9-7">9.7 Path: files and directories <a class="anchor" href="#s9-7" aria-label="Link to this section">#</a></h3>
+<p><code>Path</code> works like Python's <code>pathlib.Path</code>. A Path is an immutable value, and building or taking one apart never touches the disk. The methods that do touch the disk need IO.</p>
+<pre class="lang-python"><code>d = <span class="bi">Path</span>(<span class="str">&quot;data&quot;</span>) / <span class="str">&quot;2026&quot;</span> / <span class="str">&quot;11&quot;</span>       <span class="com"># join with /; Path(&quot;data&quot;, &quot;2026&quot;, &quot;11&quot;) is the same</span>
+d.mkdir()                              <span class="com"># creates missing parents too; fine if it exists</span>
+<span class="kw">for</span> p <span class="kw">in</span> d.iterdir():                  <span class="com"># sorted</span>
+    <span class="kw">if</span> p.suffix == <span class="str">&quot;.txt&quot;</span> <span class="kw">and</span> p.is_file():
+        <span class="bi">print</span>(p.name, p.stat()[<span class="str">&quot;size&quot;</span>])
+<span class="kw">for</span> p <span class="kw">in</span> <span class="bi">Path</span>(<span class="str">&quot;data&quot;</span>).rglob(<span class="str">&quot;*.grib2&quot;</span>):   <span class="com"># recursive, sorted</span>
+    ...
+f = <span class="bi">Stream</span>(d / <span class="str">&quot;obs.txt&quot;</span>)              <span class="com"># Stream, Archive and read/write methods accept a Path</span></code></pre>
+<p><strong>Text</strong> is kept normalized, with forward slashes: <code>Path(&quot;a//b/./c/&quot;)</code> is <code>a/b/c</code>, and <code>Path()</code> is <code>.</code>. <code>..</code> is kept as written (only <code>resolve()</code> can remove it, because that needs the filesystem). <code>str(p)</code> gives the text and <code>repr(p)</code> gives <code>Path(&#x27;a/b/c&#x27;)</code>. Paths compare and sort by their text, can be dict keys, and <code>sorted()</code> takes a list of them.</p>
+<p><strong>Pure (no filesystem access):</strong></p>
+<div class="table"><table><thead><tr><th></th><th><code>Path(&quot;data/obs.tar.gz&quot;)</code> gives</th></tr></thead><tbody><tr><td><code>p.name</code></td><td><code>&quot;obs.tar.gz&quot;</code></td></tr><tr><td><code>p.stem</code></td><td><code>&quot;obs.tar&quot;</code></td></tr><tr><td><code>p.suffix</code></td><td><code>&quot;.gz&quot;</code> (<code>&quot;&quot;</code> for <code>.bashrc</code> or <code>README</code>)</td></tr><tr><td><code>p.parent</code></td><td><code>Path(&#x27;data&#x27;)</code> (<code>Path(&quot;a&quot;).parent</code> is <code>.</code>, <code>Path(&quot;/&quot;).parent</code> is <code>/</code>)</td></tr><tr><td><code>p.parts</code></td><td><code>[&quot;data&quot;, &quot;obs.tar.gz&quot;]</code> (an absolute path starts with <code>&quot;/&quot;</code>)</td></tr><tr><td><code>p / &quot;x&quot;</code>, <code>&quot;dir&quot; / p</code>, <code>p / q</code></td><td>joined; an absolute right side replaces the left, as in pathlib</td></tr><tr><td><code>p.joinpath(a, b, ...)</code></td><td>same as <code>p / a / b</code></td></tr><tr><td><code>p.with_suffix(&quot;.zip&quot;)</code></td><td><code>Path(&#x27;data/obs.tar.zip&#x27;)</code>; <code>&quot;&quot;</code> removes the suffix</td></tr><tr><td><code>p.with_name(&quot;x.csv&quot;)</code></td><td><code>Path(&#x27;data/x.csv&#x27;)</code></td></tr><tr><td><code>p.is_absolute()</code></td><td><code>False</code></td></tr></tbody></table></div>
+<p><strong>Filesystem (IO):</strong></p>
+<div class="table"><table><thead><tr><th>Method</th><th>Returns</th><th>Notes</th></tr></thead><tbody><tr><td><code>exists()</code>, <code>is_dir()</code>, <code>is_file()</code></td><td>bool</td><td>never raise</td></tr><tr><td><code>iterdir()</code></td><td>list of Path</td><td>entries of a directory, <strong>sorted</strong></td></tr><tr><td><code>glob(pattern)</code></td><td>list of Path, sorted</td><td><code>*</code>, <code>?</code>, <code>[abc]</code>, <code>[a-z]</code>, <code>[!x]</code> within a name; <code>**</code> for any number of directories (<code>&quot;**/*.csv&quot;</code>); <code>/</code> between levels (<code>&quot;*/obs/*.txt&quot;</code>). <code>*</code> also matches names starting with <code>.</code></td></tr><tr><td><code>rglob(pattern)</code></td><td>list of Path, sorted</td><td><code>glob(&quot;**/&quot; + pattern)</code>: everywhere below</td></tr><tr><td><code>mkdir([mode])</code></td><td>bool: whether it was created</td><td>creates parents; an existing directory is fine (<code>False</code>); an existing <em>file</em> raises. <code>mode</code> (e.g. <code>0o750</code>) applies to the new directory</td></tr><tr><td><code>rmdir()</code></td><td>None</td><td>empty directories only</td></tr><tr><td><code>unlink()</code></td><td>None</td><td>files and symlinks; a directory raises (use <code>rmdir()</code>)</td></tr><tr><td><code>rename(target)</code></td><td>the new Path</td><td><code>target</code> is str or Path</td></tr><tr><td><code>touch()</code></td><td>None</td><td>creates an empty file, or updates the modification time</td></tr><tr><td><code>stat()</code></td><td>dict</td><td>see below</td></tr><tr><td><code>chmod(mode)</code></td><td>None</td><td><code>p.chmod(0o640)</code></td></tr><tr><td><code>resolve()</code></td><td>Path</td><td>absolute, with symlinks and <code>..</code> resolved</td></tr><tr><td><code>read_bytes()</code>, <code>read_text()</code></td><td>bytes / str</td><td><code>read_text()</code> raises <code>DecodeError</code> if the file isn't UTF-8</td></tr><tr><td><code>write_bytes(b)</code>, <code>write_text(s)</code></td><td>int: bytes / characters written</td><td>create or replace the file</td></tr></tbody></table></div>
+<p><code>stat()</code> returns a dict with <code>size</code>, <code>mode</code> (permission bits as an int: <code>f&quot;{st[&#x27;mode&#x27;]:o}&quot;</code> prints <code>640</code>), <code>perms</code> (ls-style text: <code>&quot;-rw-r-----&quot;</code>, <code>&quot;drwxr-xr-x&quot;</code>), <code>mtime</code>, <code>atime</code>, <code>ctime</code> (float seconds since the epoch), <code>uid</code>, <code>gid</code> (0 on Windows), <code>is_dir</code>, <code>is_file</code>, <code>is_link</code>.</p>
+<p>Every failure raises <code>IOError</code>, with the path and the reason in the message (<code>&quot;data/x: No such file or directory&quot;</code>).</p>
+<p>Differences from pathlib to know about:</p>
+<ul><li><code>mkdir()</code> always behaves like <code>mkdir(parents=True, exist_ok=True)</code>, which is what scripts want nearly every time (methods take no keyword arguments).</li><li><code>iterdir()</code>, <code>glob()</code> and <code>rglob()</code> return <strong>sorted lists</strong>. pathlib returns generators in directory order, which varies between machines; sorting keeps output reproducible.</li><li>There's no <code>Path.cwd()</code> or <code>Path.home()</code> (no static methods): use <code>Path(&quot;.&quot;).resolve()</code>. There's no <code>open()</code> method: use <code>Stream(p)</code>.</li><li>There's no recursive delete (<code>shutil.rmtree</code>). Remove files with <code>unlink()</code>, then directories deepest first with <code>rmdir()</code>.</li></ul>
+<h3 id="s9-8">9.8 Compression <a class="anchor" href="#s9-8" aria-label="Link to this section">#</a></h3>
+<pre class="lang-python"><code>raw = <span class="bi">decompress</span>(<span class="bi">read_file</span>(<span class="str">&quot;obs.csv.gz&quot;</span>))         <span class="com"># format detected from the data</span>
+z = <span class="bi">compress</span>(text, <span class="str">&quot;zstd&quot;</span>)                        <span class="com"># str is compressed as its UTF-8 bytes</span>
+z = <span class="bi">compress</span>(data, <span class="str">&quot;xz&quot;</span>, <span class="num">9</span>)                       <span class="com"># optional level</span>
+<span class="bi">print</span>(<span class="bi">compressors</span>())                              <span class="com"># what this build supports</span></code></pre>
+<div class="table"><table><thead><tr><th>Format</th><th>Files</th><th>Level (default)</th></tr></thead><tbody><tr><td><code>&quot;gzip&quot;</code></td><td><code>.gz</code></td><td>0..9 (6)</td></tr><tr><td><code>&quot;zlib&quot;</code></td><td>zlib streams (Python's <code>zlib.compress</code>)</td><td>0..9 (6)</td></tr><tr><td><code>&quot;deflate&quot;</code></td><td>raw deflate, no header</td><td>0..9 (6)</td></tr><tr><td><code>&quot;bz2&quot;</code></td><td><code>.bz2</code></td><td>1..9 (9)</td></tr><tr><td><code>&quot;xz&quot;</code></td><td><code>.xz</code></td><td>0..9 (6)</td></tr><tr><td><code>&quot;zstd&quot;</code></td><td><code>.zst</code></td><td>1..22 (3)</td></tr></tbody></table></div>
+<ul><li><code>compress()</code> takes str or bytes and returns bytes. <code>decompress()</code> returns bytes: add <code>.decode()</code> for text.</li><li><code>decompress(data)</code> without a format recognizes gzip, zlib, bz2, xz and zstd from their first bytes. Raw deflate has no header, so pass <code>&quot;deflate&quot;</code>.</li><li>Files made by concatenating compressed files (<code>cat a.gz b.gz &gt; c.gz</code>, and the same for bz2, xz and zstd) decompress to the concatenated contents, as <code>gunzip</code> does.</li><li>Corrupt or truncated data raises <code>DecodeError</code> ("gzip: truncated data"). An unknown format, a format missing from this build, or a bad level raises <code>ValueError</code>.</li><li><strong>Which formats exist depends on the build</strong>: each needs its library (zlib, bzip2, liblzma, libzstd) at compile time. <code>compressors()</code> and <code>dolphin --features</code> list them, and asking for a missing one says it "was not compiled into this dolphin".</li><li>These functions are <strong>pure</strong>, so <code>[decompress(b) for b in blobs]</code> runs in parallel.</li><li>Everything happens in memory. A multi-gigabyte <code>.gz</code> needs that much RAM; streaming decompression through <code>Stream</code> isn't there yet.</li></ul>
+<h3 id="s9-9">9.9 Archive: zip, tar, 7z <a class="anchor" href="#s9-9" aria-label="Link to this section">#</a></h3>
+<p><code>Archive</code> reads and writes archive files. The method names are Python's <code>zipfile</code> ones. It needs libarchive at compile time (<code>dolphin --features</code> lists <code>archive</code>); without it every Archive is invalid and says why.</p>
+<pre class="lang-python"><code>a = <span class="bi">Archive</span>(<span class="str">&quot;obs.tar.gz&quot;</span>)                <span class="com"># read: any format libarchive knows</span>
+<span class="kw">if</span> <span class="kw">not</span> a.valid:
+    <span class="bi">print</span>(a.error)
+a.namelist()                             <span class="com"># [&quot;2026/&quot;, &quot;2026/obs.txt&quot;, ...] in archive order</span>
+a.infolist()                             <span class="com"># [{&quot;name&quot;, &quot;size&quot;, &quot;mode&quot;, &quot;mtime&quot;, &quot;is_dir&quot;}, ...]</span>
+data = a.read(<span class="str">&quot;2026/obs.txt&quot;</span>)            <span class="com"># bytes; KeyError if there&#x27;s no such member</span>
+a.extractall(<span class="str">&quot;out&quot;</span>)                      <span class="com"># extract everything; returns the names written</span>
+a.extractall(<span class="str">&quot;out&quot;</span>, [<span class="str">&quot;2026/obs.txt&quot;</span>])    <span class="com"># or only these members</span>
+
+w = <span class="bi">Archive</span>(<span class="str">&quot;bundle.zip&quot;</span>, <span class="str">&quot;w&quot;</span>)           <span class="com"># write: the format comes from the name</span>
+w.writestr(<span class="str">&quot;notes.txt&quot;</span>, <span class="str">&quot;some text&quot;</span>)     <span class="com"># a member from str or bytes</span>
+w.write(<span class="str">&quot;data/obs.txt&quot;</span>)                  <span class="com"># a file from disk, stored under the same name</span>
+w.write(<span class="bi">Path</span>(<span class="str">&quot;data&quot;</span>), <span class="str">&quot;obs&quot;</span>)             <span class="com"># a directory, recursively, stored under &quot;obs/&quot;</span>
+w.close()                                <span class="com"># finishes the file: call it</span></code></pre>
+<ul><li><strong>Reading</strong> recognizes zip, tar (plain, or compressed with gzip, bzip2, xz, zstd, lz4...), 7z, cpio, ISO, rar and others. Each <code>namelist()</code>, <code>infolist()</code> and <code>read()</code> scans the archive from the start, so reading many members of a big <code>.tar.gz</code> one by one is slow. <code>extractall()</code> makes one pass.</li><li><strong>Writing</strong>: the format comes from the file name: <code>.zip</code>, <code>.7z</code>, <code>.tar</code>, <code>.tar.gz</code>/<code>.tgz</code>, <code>.tar.bz2</code>/<code>.tbz2</code>, <code>.tar.xz</code>/<code>.txz</code>, <code>.tar.zst</code>/<code>.tzst</code>, <code>.tar.lz4</code>, <code>.cpio</code>. For any other name, give the format in the mode: <code>Archive(&quot;out.bin&quot;, &quot;w:tar.gz&quot;)</code>. Directories are added in sorted order, so the same input gives the same archive. Absolute paths are stored without their leading <code>/</code>.</li><li><strong>Safety</strong>: <code>extractall()</code> refuses members that would land outside the destination (absolute paths, <code>..</code>, or a path through a symlink) and raises <code>IOError</code> instead.</li><li>Like <code>Stream</code>, constructing one <strong>never raises</strong>: check <code>valid</code> and <code>error</code>. Methods on an invalid or closed archive, and failures, raise <code>IOError</code>. Fields: <code>valid</code>, <code>error</code>, <code>name</code>, <code>mode</code> (<code>&quot;r&quot;</code> or <code>&quot;w&quot;</code>).</li><li>An unclosed archive is finished when it's freed, but an error at that point can't be reported. Call <code>close()</code>.</li><li>For a single compressed file (<code>obs.txt.gz</code>, not a tar), use <code>decompress(read_file(...))</code>. An Archive is for containers.</li><li>Every method needs IO.</li></ul>
+<hr>
+<h2 id="s10">10. Needs, purity and parallelism <a class="anchor" href="#s10" aria-label="Link to this section">#</a></h2>
+<p>You never write threads. The analyzer works out what each function <em>needs</em>, and the runtime runs independent pure calls in parallel when that's worth it. The output is always identical to sequential execution. To get parallelism, you only need to know what makes a function pure.</p>
+<h3 id="what-a-function-needs">What a function needs <a class="anchor" href="#what-a-function-needs" aria-label="Link to this section">#</a></h3>
+<p><code>dolphin --needs prog.dol</code> prints one line per function:</p>
+<div class="table"><table><thead><tr><th>Need</th><th>Comes from</th></tr></thead><tbody><tr><td><code>pure</code></td><td>nothing below</td></tr><tr><td><code>IO</code></td><td><code>print</code>, <code>read_file</code>, file streams, <code>Path</code> methods that touch the disk, <code>Archive</code></td></tr><tr><td><code>Network</code></td><td>http/tcp/unix streams, <code>Listener</code></td></tr></tbody></table></div>
+<p>Needs are <strong>transitive</strong>: a function that calls a function that prints needs <code>IO</code> too. Calls the analyzer can't resolve (through a variable) count as needing everything.</p>
+<h3 id="what-can-run-in-parallel">What can run in parallel <a class="anchor" href="#what-can-run-in-parallel" aria-label="Link to this section">#</a></h3>
+<p>A function can run on another thread when it is <code>pure</code> <strong>and</strong> it never modifies an object it didn't create itself (a parameter, a global, or anything reachable from one). Building a new list or dict and filling it is fine.</p>
+<pre class="lang-python"><code><span class="kw">def</span> decode(line):          <span class="com"># pure, builds its own dict: parallel</span>
+    r = {}
+    r[<span class="str">&quot;stn&quot;</span>] = line[<span class="num">0</span>:<span class="num">4</span>]
+    <span class="kw">return</span> r
+
+<span class="kw">def</span> decode_into(line, r):  <span class="com"># modifies its parameter: always inline</span>
+    r[<span class="str">&quot;stn&quot;</span>] = line[<span class="num">0</span>:<span class="num">4</span>]
+
+<span class="kw">def</span> decode_and_show(line): <span class="com"># prints: IO, inline, and so is everything that calls it</span>
+    <span class="bi">print</span>(line)</code></pre>
+<h3 id="where-parallelism-happens">Where parallelism happens <a class="anchor" href="#where-parallelism-happens" aria-label="Link to this section">#</a></h3>
+<ul><li><code>x = f(...)</code> where <code>f</code> is parallel-safe and the next statement doesn't use <code>x</code>: the call starts and <code>x</code> becomes a future. Reading <code>x</code> waits for it.</li><li><code>[f(v) for v in items]</code> with a parallel-safe <code>f</code>: a batched parallel map.</li><li>A call runs inline when it's predicted to be too short to be worth a thread, or when the machine is busy. Effects (<code>print</code>, I/O) happen only on the main thread, in program order, after everything dispatched before them finishes.</li><li>If several parallel calls fail, the first failure in program order is the one reported (decision 17 in LANGUAGE.md).</li></ul>
+<h3 id="filling-a-preallocated-array-in-parallel">Filling a preallocated array in parallel <a class="anchor" href="#filling-a-preallocated-array-in-parallel" aria-label="Link to this section">#</a></h3>
+<p>When a decoder knows early how many records there are, it can allocate the result once and fill it by index:</p>
+<pre class="lang-python"><code><span class="kw">def</span> decode_all(buf, offsets):
+    out = <span class="bi">array</span>(<span class="bi">len</span>(offsets))              <span class="com"># or [None] * len(offsets)</span>
+    <span class="kw">for</span> i <span class="kw">in</span> <span class="bi">range</span>(<span class="bi">len</span>(offsets)):
+        out[i] = decode_record(buf, offsets[i])
+    <span class="kw">return</span> out</code></pre>
+<p>If <code>decode_record</code> is parallel-safe, that loop runs as a parallel map: the calls run in batches on the thread pool, then the results are stored into <code>out</code> in loop order. The output is exactly what the sequential loop produces, including on failure. If record 37 raises, slots 0..36 are filled, 37 onward are untouched, <code>i</code> is 37, and the error is record 37's. On a 16-core machine a 4,000-record fill with ~0.7 ms per record ran 6× faster on 8 threads.</p>
+<p>A loop qualifies only when all of these hold. Otherwise it simply runs sequentially, which is still correct:</p>
+<ul><li>the loop body is the single statement <code>NAME[index] = f(args)</code>, inside a function (module-level code never runs in parallel);</li><li><code>f</code> is parallel-safe (<code>--needs</code> says <code>parallel</code>);</li><li>the iterable, the index and the arguments have no effects (no <code>print</code>, no stream or path methods, no <code>append</code>), and <strong>the index and arguments don't read <code>NAME</code></strong> (<code>out[i] = f(out[i - 1])</code> is a recurrence, so it stays sequential);</li><li><code>NAME</code> is a list or dict that <strong>this function created</strong>: every assignment to it is <code>array(...)</code>, <code>[...] * n</code>, a literal, a comprehension, <code>range()</code>, <code>sorted()</code> or a slice copy;</li><li><code>NAME</code> never escapes: it isn't assigned to another variable, stored in another list or dict, or passed to one of your functions (passing it to builtins like <code>len</code> or <code>print</code>, or returning it, is fine).</li></ul>
+<p>The last two rules mean no call can see the array while it's being filled. So <strong>create the array in the same function that fills it.</strong> An array passed in as a parameter disqualifies the loop, and so does a function that fills its argument, which isn't parallel-safe anyway. <code>--trace</code> shows each parallel map as it runs, with its line number and batch count; <code>--ast</code> shows how the loop was rewritten (<code>src/dolphin/src/fill.hpp</code> explains the rewrite).</p>
+<p>A comprehension, <code>out = [decode_record(buf, o) for o in offsets]</code>, gets the same parallel map with less code. Use the fill form when the index isn't just the position in a list, when filling a dict, or when the array exists before the loop for other reasons.</p>
+<p><strong>The practical rule: keep parsing and decoding in pure functions that take text or bytes and return lists/dicts, and do all reading and printing in <code>main</code>.</strong> <code>examples/metar.dol</code> is built exactly that way.</p>
+<hr>
+<h2 id="s11">11. Writing a parser for a NOAA text product <a class="anchor" href="#s11" aria-label="Link to this section">#</a></h2>
+<p>Here are the idioms I'd use for a line-oriented or fixed-column NOAA file:</p>
+<pre class="lang-python"><code><span class="com"># noaa.dol: dolphin noaa.dol FILE</span>
+
+<span class="com"># Fixed-width columns: [start, end, name]. Slices clamp, so short lines give &quot;&quot;.</span>
+COLUMNS = [[<span class="num">0</span>, <span class="num">4</span>, <span class="str">&quot;station&quot;</span>], [<span class="num">5</span>, <span class="num">11</span>, <span class="str">&quot;time&quot;</span>], [<span class="num">12</span>, <span class="num">18</span>, <span class="str">&quot;value&quot;</span>]]
+
+<span class="kw">def</span> to_int(s):              <span class="com"># None for blank or missing fields instead of an exception</span>
+    t = s.strip()
+    <span class="kw">if</span> t == <span class="str">&quot;&quot;</span> <span class="kw">or</span> t == <span class="str">&quot;M&quot;</span> <span class="kw">or</span> t == <span class="str">&quot;MM&quot;</span>:
+        <span class="kw">return</span> <span class="const">None</span>
+    <span class="kw">try</span>:
+        <span class="kw">return</span> <span class="bi">int</span>(t)
+    <span class="kw">except</span> <span class="exc">ValueError</span>:
+        <span class="kw">return</span> <span class="const">None</span>
+
+<span class="kw">def</span> to_float(s):
+    t = s.strip()
+    <span class="kw">if</span> t == <span class="str">&quot;&quot;</span> <span class="kw">or</span> t == <span class="str">&quot;M&quot;</span>:
+        <span class="kw">return</span> <span class="const">None</span>
+    <span class="kw">try</span>:
+        <span class="kw">return</span> <span class="bi">float</span>(t)
+    <span class="kw">except</span> <span class="exc">ValueError</span>:
+        <span class="kw">return</span> <span class="const">None</span>
+
+<span class="kw">def</span> parse_line(line: <span class="bi">str</span>) -&gt; dict:      <span class="com"># pure: runs in parallel over all lines</span>
+    r = {}
+    <span class="kw">for</span> c <span class="kw">in</span> COLUMNS:
+        r[c[<span class="num">2</span>]] = line[c[<span class="num">0</span>]:c[<span class="num">1</span>]].strip()
+    r[<span class="str">&quot;value&quot;</span>] = to_float(r[<span class="str">&quot;value&quot;</span>])
+    <span class="kw">return</span> r
+
+<span class="kw">def</span> is_data(line: <span class="bi">str</span>) -&gt; <span class="bi">bool</span>:
+    <span class="kw">return</span> line != <span class="str">&quot;&quot;</span> <span class="kw">and</span> <span class="kw">not</span> line.startswith(<span class="str">&quot;#&quot;</span>)
+
+<span class="kw">def</span> main(path):
+    text = <span class="bi">read_file</span>(path).decode()       <span class="com"># bytes -&gt; str (DecodeError if not UTF-8)</span>
+    lines = [l.rstrip(<span class="str">&quot;\r&quot;</span>) <span class="kw">for</span> l <span class="kw">in</span> text.split(<span class="str">&quot;\n&quot;</span>)]
+    data = [l <span class="kw">for</span> l <span class="kw">in</span> lines <span class="kw">if</span> is_data(l)]
+    rows = [parse_line(l) <span class="kw">for</span> l <span class="kw">in</span> data]  <span class="com"># parallel map</span>
+    <span class="kw">for</span> r <span class="kw">in</span> rows:
+        <span class="kw">if</span> r[<span class="str">&quot;value&quot;</span>] != <span class="const">None</span>:
+            <span class="bi">print</span>(<span class="str">f&quot;{r[&#x27;station&#x27;]:&lt;5} {r[&#x27;time&#x27;]:&gt;6} {r[&#x27;value&#x27;]:8.2f}&quot;</span>)
+    <span class="bi">print</span>(<span class="str">f&quot;{len(rows)} rows&quot;</span>)
+    <span class="kw">return</span> <span class="num">0</span></code></pre>
+<p>Notes:</p>
+<ul><li><code>read_file()</code> gives bytes. Call <code>.decode()</code> once on the whole file, then work with <code>str</code>. If the file can contain non-UTF-8 bytes (old Latin-1 products), either work on bytes slices or catch <code>DecodeError</code>.</li><li>Strip <code>&quot;\r&quot;</code> yourself: <code>split(&quot;\n&quot;)</code> leaves it on CRLF files, and the plain <code>split()</code> (whitespace) removes it as part of the run.</li><li>Whitespace-separated fields: <code>line.split()</code>. Exact separators (CSV, <code>|</code>): <code>line.split(&quot;,&quot;)</code>, which keeps empty fields so column positions hold.</li><li>Missing-value markers (<code>M</code>, <code>MM</code>, <code>9999</code>, <code>-9999.0</code>): convert to <code>None</code> in one helper and compare with <code>== None</code> later. There's no <code>is</code>.</li><li>A "record" is a dict; a fixed pair is a two-element list. There are no tuples.</li><li>To report a malformed record, <code>raise DecodeError(f&quot;{stn}: bad group {g}&quot;)</code> and catch it in <code>main</code> if you want to skip the record and keep going.</li><li>To keep the decoder parallel, don't <code>print</code> from inside it, and don't let it fill a dict or list that was passed in. Return new ones.</li><li>Compressed input (<code>.gz</code>, <code>.bz2</code>, <code>.xz</code>, <code>.zst</code>): <code>decompress(read_file(path)).decode()</code> gives you the text in one step. A directory of daily files: <code>for p in Path(&quot;obs&quot;).glob(&quot;*.txt.gz&quot;): ...</code> (sorted, so files are processed in date order when their names sort that way).</li><li>If a header line tells you the record count, <code>out = array(n)</code> and an indexed fill loop run the decoding in parallel (<a href="#s10">§10</a>). <code>Stream(p).count_lines()</code> is a cheap way to size arrays for line-per-record files.</li><li>Test pieces in the Python-compatible subset with CPython via <code>src/dolphin/tests/py_oracle.py</code>, which supplies <code>read_file</code> and <code>DecodeError</code>, so you get a second opinion on the logic.</li></ul>
+<footer>Generated from <code>doc/REFERENCE.md</code>. Dolphin is part of the Amoebatu project.</footer>
+</main>
+</div>
+<script>
+(function(){
+  var nav=document.querySelector('nav'),filter=document.getElementById('filter');
+  document.querySelector('.menu').addEventListener('click',function(){nav.classList.toggle('open')});
+  filter.addEventListener('input',function(){
+    var q=filter.value.toLowerCase();
+    nav.querySelectorAll('.toc > li').forEach(function(top){
+      var any=false;
+      top.querySelectorAll('li').forEach(function(li){var hit=li.textContent.toLowerCase().indexOf(q)>=0;li.style.display=hit?'':'none';any=any||hit});
+      var self=top.firstElementChild.textContent.toLowerCase().indexOf(q)>=0;
+      top.style.display=(self||any)?'':'none';
+      if(self&&!any)top.querySelectorAll('li').forEach(function(li){li.style.display=''});
+    });
+  });
+  document.querySelectorAll('pre').forEach(function(pre){
+    if(!navigator.clipboard)return;
+    var b=document.createElement('button');b.className='copy';b.type='button';b.textContent='Copy';
+    b.addEventListener('click',function(){navigator.clipboard.writeText(pre.innerText.replace(/Copy$/,'')).then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy'},1200)})});
+    pre.appendChild(b);
+  });
+  var links={};nav.querySelectorAll('.toc a').forEach(function(a){links[a.getAttribute('href').slice(1)]=a});
+  if('IntersectionObserver' in window){
+    var current=null;
+    var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting&&links[e.target.id]){if(current)current.classList.remove('active');current=links[e.target.id];current.classList.add('active')}})},{rootMargin:'0px 0px -75% 0px'});
+    document.querySelectorAll('main h2[id],main h3[id]').forEach(function(h){io.observe(h)});
+  }
+})();
+</script>
+</body>
+</html>

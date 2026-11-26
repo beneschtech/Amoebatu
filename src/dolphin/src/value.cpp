@@ -5,6 +5,8 @@
 #include "value.hpp"
 #include "json.hpp"
 #include "listener.hpp"
+#include "archive.hpp"
+#include "path.hpp"
 #include "stream.hpp"
 
 #include <cmath>
@@ -144,6 +146,7 @@ bool dictKey(const Value& v, std::string& out) {
         return true;
     }
     if (v.is<std::shared_ptr<const ExcClass>>()) { out = "C" + v.as<std::shared_ptr<const ExcClass>>()->name; return true; }
+    if (v.isPath()) { out = "Q" + v.as<std::shared_ptr<const PathV>>()->p; return true; }
     return false;   // list, dict, builtins, methods, exception instances
 }
 
@@ -167,9 +170,13 @@ std::string typeName(const Value& v) {
         std::string operator()(const std::shared_ptr<Response>&) const { return "Response"; }
         std::string operator()(const std::shared_ptr<const JsonDoc>&) const { return "JSON"; }
         std::string operator()(const std::shared_ptr<Listener>&) const { return "Listener"; }
+        std::string operator()(const std::shared_ptr<const PathV>&) const { return "Path"; }
+        std::string operator()(const std::shared_ptr<Archive>&) const { return "Archive"; }
     };
     return std::visit(V{}, v.v);
 }
+
+Value Value::path(const std::string& p) { return Value(std::make_shared<const PathV>(PathV{normalizePath(p)})); }
 
 bool truthy(const Value& v) {
     if (v.isNone()) return false;
@@ -241,6 +248,11 @@ std::string toRepr(const Value& v) {
         }
         return o + "'";
     }
+    if (v.isPath()) {
+        const std::string& t = v.as<std::shared_ptr<const PathV>>()->p;
+        bool sq = t.find('\'') != std::string::npos, dq = t.find('"') != std::string::npos;
+        return "Path(" + quoteStr(t, sq && !dq ? '"' : '\'') + ")";
+    }
     return toStr(v);
 }
 
@@ -283,6 +295,8 @@ std::string toStr(const Value& v) {
         return l.running() ? "<Listener " + l.describe() + ">" : "<Listener>";
     }
     if (v.isJson()) return jsonText(*v.as<std::shared_ptr<const JsonDoc>>(), false);
+    if (v.isPath()) return v.as<std::shared_ptr<const PathV>>()->p;
+    if (v.isArchive()) return "<Archive " + v.as<std::shared_ptr<Archive>>()->path() + ">";
     return "?";
 }
 
@@ -331,6 +345,8 @@ bool valuesEqual(const Value& a, const Value& b) {
     if (a.isListener()) return a.as<std::shared_ptr<Listener>>() == b.as<std::shared_ptr<Listener>>();
     if (a.isJson()) return jsonEqual(*a.as<std::shared_ptr<const JsonDoc>>(), *b.as<std::shared_ptr<const JsonDoc>>());
     if (a.isResponse()) return a.as<std::shared_ptr<Response>>() == b.as<std::shared_ptr<Response>>();
+    if (a.isPath()) return a.as<std::shared_ptr<const PathV>>()->p == b.as<std::shared_ptr<const PathV>>()->p;
+    if (a.isArchive()) return a.as<std::shared_ptr<Archive>>() == b.as<std::shared_ptr<Archive>>();
     if (a.is<std::shared_ptr<const ExcClass>>())
         return a.as<std::shared_ptr<const ExcClass>>()->name == b.as<std::shared_ptr<const ExcClass>>()->name;
     return false;

@@ -1,0 +1,11 @@
+backwards	pure	parallel
+bad_index	IO	inline (has needs)
+basic	pure	parallel
+check	pure	parallel
+escapes	pure	parallel
+into_dict	pure	parallel
+main	IO	inline (has needs)
+partial	IO	inline (has needs)
+recurrence	pure	parallel
+work	pure	parallel
+<module>	IO

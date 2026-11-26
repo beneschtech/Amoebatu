@@ -45,6 +45,10 @@ add_library(dolphin_core STATIC
   src/base64.cpp
   src/poller.cpp
   src/listener.cpp
+  src/path.cpp
+  src/compress.cpp
+  src/archive.cpp
+  src/fill.cpp
 )
 target_include_directories(dolphin_core PUBLIC src)
 find_package(Threads REQUIRED)
@@ -61,6 +65,48 @@ if(TARGET JsonCpp::JsonCpp)
 else()
   target_link_libraries(dolphin_core PUBLIC jsoncpp_lib)
 endif()
+# Compression (src/compress.hpp) and archives (src/archive.hpp). All optional:
+# each library found adds its formats, and the rest raise a clear error at run
+# time ("... support was not compiled in"). `dolphin --features` lists them.
+# DOLPHIN_COMPRESSION=OFF leaves all of them out.
+option(DOLPHIN_COMPRESSION "Build compression and archive support with whatever libraries are found" ON)
+if(DOLPHIN_COMPRESSION)
+  find_package(ZLIB QUIET)
+  if(ZLIB_FOUND)
+    target_link_libraries(dolphin_core PUBLIC ZLIB::ZLIB)
+    target_compile_definitions(dolphin_core PUBLIC DOLPHIN_HAVE_ZLIB)
+    list(APPEND _dolphin_features gzip zlib deflate)
+  endif()
+  find_package(BZip2 QUIET)
+  if(BZIP2_FOUND)
+    target_link_libraries(dolphin_core PUBLIC BZip2::BZip2)
+    target_compile_definitions(dolphin_core PUBLIC DOLPHIN_HAVE_BZIP2)
+    list(APPEND _dolphin_features bz2)
+  endif()
+  find_package(LibLZMA QUIET)
+  if(LIBLZMA_FOUND)
+    target_link_libraries(dolphin_core PUBLIC LibLZMA::LibLZMA)
+    target_compile_definitions(dolphin_core PUBLIC DOLPHIN_HAVE_LZMA)
+    list(APPEND _dolphin_features xz)
+  endif()
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(DOLPHIN_ZSTD QUIET IMPORTED_TARGET libzstd)
+    if(DOLPHIN_ZSTD_FOUND)
+      target_link_libraries(dolphin_core PUBLIC PkgConfig::DOLPHIN_ZSTD)
+      target_compile_definitions(dolphin_core PUBLIC DOLPHIN_HAVE_ZSTD)
+      list(APPEND _dolphin_features zstd)
+    endif()
+  endif()
+  find_package(LibArchive QUIET)
+  if(LibArchive_FOUND)
+    target_link_libraries(dolphin_core PUBLIC LibArchive::LibArchive)
+    target_compile_definitions(dolphin_core PUBLIC DOLPHIN_HAVE_LIBARCHIVE)
+    list(APPEND _dolphin_features archive)
+  endif()
+endif()
+message(STATUS "Dolphin compression: ${_dolphin_features}")
+
 # shm_open (shared machine profile) lives in librt before glibc 2.34 (e.g.
 # Alma/RHEL 8); newer glibc keeps an empty librt, so linking it is harmless.
 find_library(DOLPHIN_RT_LIBRARY rt)

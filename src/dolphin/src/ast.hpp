@@ -73,17 +73,35 @@ enum class Method : uint8_t {
     startswith, endswith, find, replace, count, isdigit,
     isalpha, isspace, encode, decode, hex, append, pop,
     extend, index, get, keys, values,
-    // Stream (stream.hpp): the only methods with needs; see isStreamMethod().
-    open, read, readline, write, seek, tell, close, set_timeout,
+    // Stream (stream.hpp): IO or Network, see isStreamMethod(). read/write/close
+    // are shared with Archive, whose receivers the analyzer tracks the same way.
+    open, read, readline, write, seek, tell, close, count_lines, set_timeout,
     // JSON (json.hpp): pure.
     value, toString, prettyPrint,
     // Listener (listener.hpp): Network. set_timeout above is shared with Stream.
     bind, threads, per_connection, limit, drain, start, stop, wait,
+    // Path (path.hpp), pure: they only compute new paths.
+    with_suffix, with_name, is_absolute, joinpath,
+    // Path, touching the filesystem: IO, see isPathIOMethod().
+    exists, is_dir, is_file, iterdir, glob, rglob, mkdir, rmdir, unlink, rename,
+    stat, chmod, touch, resolve, read_bytes, read_text, write_bytes, write_text,
+    // Archive (archive.hpp): IO, see isArchiveMethod().
+    namelist, infolist, extractall, writestr,
 };
+/// @brief Number of Method values (for per-type method sets).
+constexpr unsigned kMethodCount = static_cast<unsigned>(Method::writestr) + 1;
 /// @brief Is @p m a method only Listener has? Those need Network.
 inline bool isListenerMethod(Method m) { return m >= Method::bind && m <= Method::wait; }
-/// @brief Is @p m a method of Stream? Those have needs (IO or Network); every other method is pure.
+/// @brief Is @p m a method of Stream? Those have needs (IO or Network) that depend on the receiver.
 inline bool isStreamMethod(Method m) { return m >= Method::open && m <= Method::set_timeout; }
+/// @brief Is @p m a Path method that touches the filesystem? Those need IO.
+inline bool isPathIOMethod(Method m) { return m >= Method::exists && m <= Method::write_text; }
+/// @brief Is @p m a method only Archive has? Those need IO.
+inline bool isArchiveMethod(Method m) { return m >= Method::namelist && m <= Method::writestr; }
+/// @brief Does calling @p m have an effect (any needs)? Every other method is pure.
+inline bool isEffectMethod(Method m) {
+    return isStreamMethod(m) || isListenerMethod(m) || isPathIOMethod(m) || isArchiveMethod(m);
+}
 /// @brief The Method named @p name, or Method::None.
 Method methodByName(const std::string& name);
 /// @brief A method's name (empty for Method::None).

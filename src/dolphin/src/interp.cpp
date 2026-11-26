@@ -10,8 +10,10 @@
  * because they must unwind any number of C++ frames to the nearest `try`.
  */
 #include "interp.hpp"
+#include "analyzer.hpp"
 #include "json.hpp"
 #include "listener.hpp"
+#include "path.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -624,64 +626,9 @@ void Interp::barrier() {
 }
 
 // Comprehension conditions and arguments run early (all of them before the
-// calls), so they must not have effects or mutate anything.
-bool Interp::exprIsReorderable(const Expr& e) const {
-    switch (e.k) {
-    case Expr::K::Call: {
-        auto& c = static_cast<const Call&>(e);
-        if (c.fn->k == Expr::K::Name) {
-            auto& n = static_cast<const Name&>(*c.fn);
-            if (n.bind == Bind::Builtin && n.needs != NeedNone) return false;
-            if (n.def && !n.def->parallelSafe()) return false;
-            if (!n.def && n.bind != Bind::Builtin && n.bind != Bind::Exception) return false;
-        } else if (c.fn->k == Expr::K::Attr) {
-            const std::string& m = static_cast<const Attr&>(*c.fn).name;
-            if (m == "append" || m == "extend" || m == "pop") return false;
-            if (!exprIsReorderable(*static_cast<const Attr&>(*c.fn).obj)) return false;
-        } else {
-            return false;
-        }
-        for (auto& a : c.args)
-            if (!exprIsReorderable(*a)) return false;
-        for (auto& [k, v] : c.kwargs)
-            if (!exprIsReorderable(*v)) return false;
-        return true;
-    }
-    case Expr::K::FStr:
-        for (auto& p : static_cast<const FStr&>(e).parts)
-            if (p.expr && !exprIsReorderable(*p.expr)) return false;
-        return true;
-    case Expr::K::Unary: return exprIsReorderable(*static_cast<const Unary&>(e).operand);
-    case Expr::K::Binary:
-        return exprIsReorderable(*static_cast<const Binary&>(e).lhs) && exprIsReorderable(*static_cast<const Binary&>(e).rhs);
-    case Expr::K::BoolOp:
-        return exprIsReorderable(*static_cast<const BoolOp&>(e).lhs) && exprIsReorderable(*static_cast<const BoolOp&>(e).rhs);
-    case Expr::K::Compare: {
-        auto& c = static_cast<const Compare&>(e);
-        if (!exprIsReorderable(*c.first)) return false;
-        for (auto& [op, r] : c.rest)
-            if (!exprIsReorderable(*r)) return false;
-        return true;
-    }
-    case Expr::K::Index:
-        return exprIsReorderable(*static_cast<const Index&>(e).obj) && exprIsReorderable(*static_cast<const Index&>(e).index);
-    case Expr::K::Slice: {
-        auto& s = static_cast<const Slice&>(e);
-        return (!s.lo || exprIsReorderable(*s.lo)) && (!s.hi || exprIsReorderable(*s.hi));
-    }
-    case Expr::K::Attr: return exprIsReorderable(*static_cast<const Attr&>(e).obj);
-    case Expr::K::List:
-        for (auto& x : static_cast<const ListLit&>(e).elems)
-            if (!exprIsReorderable(*x)) return false;
-        return true;
-    case Expr::K::Dict:
-        for (auto& [k, v] : static_cast<const DictLit&>(e).items)
-            if (!exprIsReorderable(*k) || !exprIsReorderable(*v)) return false;
-        return true;
-    case Expr::K::ListComp: return false;   // keep nesting simple: the inner one may parallelize on its own
-    default: return true;                   // literals and names
-    }
-}
+// calls), so they must not have effects or mutate anything. The test is
+// shared with the parallel-fill rewrite (fill.cpp): isReorderableExpr().
+bool Interp::exprIsReorderable(const Expr& e) const { return isReorderableExpr(e); }
 
 // [f(args) for v in xs if cond] with f parallel-safe: evaluate every
 // condition and argument list first (in order, on this thread), then run the
@@ -1242,6 +1189,12 @@ Value Interp::binary(Op op, const Value& a, const Value& b, int line) const {
         if (b.isJson()) return jsonValue(*b.as<std::shared_ptr<const JsonDoc>>());
     }
 
+    // Paths (path.hpp): `p / "name"`, `"dir" / p`, `p / q` join, as in pathlib.
+    if (op == Op::Div && (a.isPath() || b.isPath()) && (a.isPath() || a.isStr()) && (b.isPath() || b.isStr())) {
+        auto text = [](const Value& v) -> const std::string& { return v.isPath() ? v.as<std::shared_ptr<const PathV>>()->p : v.s().s; };
+        return Value::path(pathJoin(text(a), text(b)));
+    }
+
     // Sequences
     if (op == Op::Add) {
         if (a.isStr() && b.isStr()) return Value::str(a.s().s + b.s().s);
@@ -1374,6 +1327,8 @@ bool Interp::compare(Op op, const Value& a, const Value& b, int line) const {
         c = a.s().s.compare(b.s().s);   // UTF-8 byte order == code point order
     } else if (a.isBytes() && b.isBytes()) {
         c = a.b().b.compare(b.b().b);
+    } else if (a.isPath() && b.isPath()) {   // by text, as pathlib orders paths
+        c = a.as<std::shared_ptr<const PathV>>()->p.compare(b.as<std::shared_ptr<const PathV>>()->p);
     } else {
         raise("TypeError", "'" + std::string(opSpelling(op)) + "' not supported between '" + typeName(a) + "' and '" + typeName(b) + "'", line);
     }

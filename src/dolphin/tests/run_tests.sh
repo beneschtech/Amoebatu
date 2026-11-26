@@ -10,6 +10,8 @@
 #   cases/X.dol + X.needs  `dolphin --needs` output must match
 #   cases/X.dol + X.both   stdout and stderr together (2>&1) must match, exit nonzero:
 #                          checks that output printed before an error appears before it
+#   cases/X.requires       optional features (words from `dolphin --features`, e.g. zstd,
+#                          archive) the case needs; without them it's skipped, and counted
 # Plus the examples in ../examples against the bulletins and fixtures in data/.
 set -u
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
@@ -54,10 +56,22 @@ runp() {
     "$BIN" $opts "$d" "$@"
 }
 cd "$(dirname "$0")/cases" || exit 2
-pass=0 fail=0
+pass=0 fail=0 skipped=0
+FEATURES=" $("$BIN" --features | tr '\n' ' ') "
 report() { if [ "$1" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $2"; fi; }
 for src in *.dol; do
     name=${src%.dol}
+    if [ -f "$name.requires" ]; then
+        missing=""
+        for feat in $(cat "$name.requires"); do
+            case "$FEATURES" in *" $feat "*) ;; *) missing="$missing $feat" ;; esac
+        done
+        if [ -n "$missing" ]; then
+            echo "skip: $name (not compiled in:$missing)"
+            skipped=$((skipped+1))
+            continue
+        fi
+    fi
     for t in $THREADS; do
         if [ -f "$name.out" ]; then
             runp "$src" $(thr "$t") 2>/dev/null | diff -u "$name.out" - >/dev/null; report $? "$name (stdout, $t threads)"
@@ -101,5 +115,9 @@ example metar metar_edge.out data/metar_edge.txt
 "$BIN" --stats flood.dol 2>/tmp/dolphin_flood_stats.$$ | (sleep 1; awk 'NR<=250000 && $1 != sprintf("%07d", NR-1) {bad=1} END {exit !(NR==250001 && !bad && $0=="done")}')
 report $? "output backpressure (all lines, in order)"
 rm -f /tmp/dolphin_flood_stats.$$
-echo "$pass passed, $fail failed"
+# The published HTML reference is generated from doc/REFERENCE.md and must match it.
+if command -v python3 >/dev/null 2>&1; then
+    python3 ../../../doc/build_reference_html.py --check; report $? "doc/reference.html matches doc/REFERENCE.md"
+fi
+echo "$pass passed, $fail failed, $skipped skipped"
 [ "$fail" = 0 ]

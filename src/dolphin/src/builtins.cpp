@@ -20,14 +20,18 @@
  * Network; a new method with an effect must be added to that range.
  */
 #include <algorithm>
+#include <bitset>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 
+#include "archive.hpp"
+#include "compress.hpp"
 #include "interp.hpp"
 #include "json.hpp"
+#include "path.hpp"
 #include "listener.hpp"
 #include "stream.hpp"
 
@@ -46,6 +50,14 @@ const std::unordered_map<std::string, unsigned>& builtinNeeds() {
         {"JSON", NeedNone}, {"__is_json", NeedNone},
         // A server (listener.hpp).
         {"Listener", NeedNetwork},
+        // Paths (path.hpp): building one is pure; its filesystem methods need IO.
+        {"Path", NeedNone},
+        // Archives (archive.hpp): opening one reads or creates a file.
+        {"Archive", NeedIO},
+        // pure: compression codecs (compress.hpp), bytes in and bytes out.
+        {"compress", NeedNone}, {"decompress", NeedNone}, {"compressors", NeedNone},
+        // pure: preallocated lists, and the parallel-fill rewrite's helpers (fill.hpp).
+        {"array", NeedNone}, {"__fill_ok", NeedNone}, {"__fill", NeedNone},
         // pure: conversions and helpers
         {"len", NeedNone}, {"range", NeedNone}, {"str", NeedNone}, {"repr", NeedNone}, {"int", NeedNone},
         {"float", NeedNone}, {"bool", NeedNone}, {"abs", NeedNone}, {"min", NeedNone}, {"max", NeedNone},
@@ -184,6 +196,7 @@ void Interp::installBuiltins() {
     // Never raises for a target that can't be opened: check .valid and .error.
     addBuiltin("Stream", [](Interp& in, Args& a, int line) {
         arity(in, "Stream", a, 1, 1, line);
+        if (a[0].isPath()) return Value(std::make_shared<Stream>(a[0].as<std::shared_ptr<const PathV>>()->p));
         return Value(std::make_shared<Stream>(needStr(in, a[0], "target", line)));
     });
 
@@ -201,6 +214,99 @@ void Interp::installBuiltins() {
         return Value(std::make_shared<Listener>(static_cast<int>(port)));
     });
     addBuiltin("__is_json", [](Interp&, Args& a, int) { return Value(a.size() == 1 && a[0].isJson()); });
+
+    // Path(*parts): a path from str or Path pieces, joined; Path() is ".".
+    addBuiltin("Path", [](Interp& in, Args& a, int line) {
+        std::string p = ".";
+        for (size_t i = 0; i < a.size(); ++i) {
+            const std::string* t = a[i].isPath() ? &a[i].as<std::shared_ptr<const PathV>>()->p
+                                 : a[i].isStr()  ? &a[i].s().s : nullptr;
+            if (!t) in.raise("TypeError", "Path() takes str or Path arguments, not " + typeName(a[i]), line);
+            p = i == 0 ? *t : pathJoin(p, *t);
+        }
+        return Value::path(p);
+    });
+
+    // Archive(path[, mode]): mode "r" (default), "w", or "w:<ext>". Never raises: check .valid.
+    addBuiltin("Archive", [](Interp& in, Args& a, int line) {
+        arity(in, "Archive", a, 1, 2, line);
+        std::string path = a[0].isPath() ? a[0].as<std::shared_ptr<const PathV>>()->p : needStr(in, a[0], "path", line);
+        std::string mode = a.size() == 2 ? needStr(in, a[1], "mode", line) : std::string("r");
+        return Value(std::make_shared<Archive>(path, mode));
+    });
+
+    // compress(data, format[, level]) / decompress(data[, format]) / compressors().
+    // data may be str (compressed as its UTF-8 bytes) or bytes; the result is bytes.
+    auto codecData = [](Interp& in, const Value& v, int line) -> const std::string& {
+        if (v.isStr()) return v.s().s;
+        return needBytes(in, v, "data", line);
+    };
+    addBuiltin("compress", [codecData](Interp& in, Args& a, int line) {
+        arity(in, "compress", a, 2, 3, line);
+        const std::string& data = codecData(in, a[0], line);
+        const std::string& fmt = needStr(in, a[1], "format", line);
+        int level = a.size() == 3 ? static_cast<int>(needInt(in, a[2], "level", line)) : -1;
+        if (a.size() == 3 && level < 0) in.raise("ValueError", "compression level must not be negative", line);
+        codec::Result r = codec::compress(fmt, data, level);
+        if (!r.ok) in.raise(r.kind, r.error, line);
+        return Value::bytes(std::move(r.data));
+    });
+    addBuiltin("decompress", [codecData](Interp& in, Args& a, int line) {
+        arity(in, "decompress", a, 1, 2, line);
+        const std::string& data = codecData(in, a[0], line);
+        std::string fmt = a.size() == 2 ? needStr(in, a[1], "format", line) : std::string();
+        codec::Result r = codec::decompress(fmt, data);
+        if (!r.ok) in.raise(r.kind, r.error, line);
+        return Value::bytes(std::move(r.data));
+    });
+    addBuiltin("compressors", [](Interp& in, Args& a, int line) {
+        arity(in, "compressors", a, 0, 0, line);
+        std::vector<Value> out;
+        for (auto& f : codec::available()) out.push_back(Value::str(f));
+        return Value::list(std::move(out));
+    });
+
+    // array(n[, fill]): a list of n copies of fill (default None), allocated once.
+    // Like `[fill] * n`; a fill list or dict is shared by every slot, as in Python.
+    addBuiltin("array", [](Interp& in, Args& a, int line) {
+        arity(in, "array", a, 1, 2, line);
+        int64_t n = needInt(in, a[0], "size", line);
+        if (n < 0) in.raise("ValueError", "array() size must not be negative", line);
+        if (n > (int64_t{1} << 31)) in.raise("ValueError", "array() size is too large (at most 2147483648)", line);
+        return Value::list(std::vector<Value>(static_cast<size_t>(n), a.size() == 2 ? a[1] : Value()));
+    });
+
+    // The parallel-fill rewrite (fill.hpp). __fill_ok(out, keys): would every
+    // `out[k] = v` succeed? __fill(out, keys, vals): do them, in order.
+    addBuiltin("__fill_ok", [](Interp&, Args& a, int) {
+        if (a.size() != 2 || !a[1].isList()) return Value(false);
+        auto& keys = a[1].l().items;
+        if (a[0].isList()) {
+            auto len = static_cast<int64_t>(a[0].l().items.size());
+            for (auto& k : keys) {
+                if (!k.isInt()) return Value(false);
+                int64_t i = k.as<int64_t>();
+                if (i < -len || i >= len) return Value(false);
+            }
+            return Value(true);
+        }
+        if (a[0].isDict()) {
+            std::string ck;
+            for (auto& k : keys)
+                if (!dictKey(k, ck)) return Value(false);
+            return Value(true);
+        }
+        return Value(false);
+    });
+    addBuiltin("__fill", [](Interp& in, Args& a, int line) {
+        if (a.size() != 3 || !a[1].isList() || !a[2].isList() || a[1].l().items.size() != a[2].l().items.size())
+            in.raise("RuntimeError", "malformed parallel fill", line);
+        auto& keys = a[1].l().items;
+        auto& vals = a[2].l().items;
+        for (size_t i = 0; i < keys.size(); ++i) in.setIndex(a[0], keys[i], vals[i], line);   // barrier() inside
+        return Value();
+    });
+
 
     addBuiltin("len", [](Interp& in, Args& a, int line) {
         arity(in, "len", a, 1, 1, line);
@@ -341,14 +447,16 @@ void Interp::installBuiltins() {
         if (a[0].isList()) items = a[0].l().items;
         else if (a[0].isDict()) for (auto& [k, x] : a[0].d().entries) items.push_back(k);
         else in.raise("TypeError", "sorted() needs a list or dict", line);
-        bool allNum = true, allStr = true;
+        bool allNum = true, allStr = true, allPath = true;
         for (auto& x : items) {
             allNum = allNum && x.isNum();
             allStr = allStr && x.isStr();
+            allPath = allPath && x.isPath();
         }
-        if (!allNum && !allStr) in.raise("TypeError", "sorted() needs all numbers or all strings", line);
+        if (!allNum && !allStr && !allPath) in.raise("TypeError", "sorted() needs all numbers, all strings or all paths", line);
         std::stable_sort(items.begin(), items.end(), [&](const Value& x, const Value& y) {
             if (allStr) return x.s().s < y.s().s;
+            if (allPath) return x.as<std::shared_ptr<const PathV>>()->p < y.as<std::shared_ptr<const PathV>>()->p;
             return needNum(in, x, "sorted", line) < needNum(in, y, "sorted", line);
         });
         return Value::list(std::move(items));
@@ -432,29 +540,39 @@ void Interp::installBuiltins() {
 /// Method names per type. attribute() consults this, so a misspelled method
 /// fails at the `.name` lookup with a clear AttributeError, not at the call.
 /// @brief Which methods each type has (attribute lookup validates against this).
-static uint64_t methodMask(std::initializer_list<Method> ms) {
-    uint64_t m = 0;
-    for (Method x : ms) m |= uint64_t{1} << static_cast<unsigned>(x);
+using MethodSet = std::bitset<kMethodCount>;
+static MethodSet methodMask(std::initializer_list<Method> ms) {
+    MethodSet m;
+    for (Method x : ms) m.set(static_cast<unsigned>(x));
     return m;
 }
 using M = Method;
-static const uint64_t kStrMethods = methodMask({M::upper, M::lower, M::strip, M::lstrip, M::rstrip, M::split, M::join,
-                                                M::startswith, M::endswith, M::find, M::replace, M::count, M::isdigit,
-                                                M::isalpha, M::isspace, M::encode});
-static const uint64_t kBytesMethods = methodMask({M::decode, M::find, M::startswith, M::endswith, M::hex});
-static const uint64_t kListMethods = methodMask({M::append, M::pop, M::extend, M::index, M::count});
-static const uint64_t kDictMethods = methodMask({M::get, M::keys, M::values, M::pop});
-static const uint64_t kStreamMethods = methodMask({M::open, M::read, M::readline, M::write, M::seek, M::tell,
-                                                   M::close, M::set_timeout});
-static const uint64_t kListenerMethods = methodMask({M::bind, M::threads, M::per_connection, M::limit, M::drain,
-                                                     M::start, M::stop, M::wait, M::set_timeout});
-static const uint64_t kJsonMethods = methodMask({M::value, M::toString, M::prettyPrint});
+static const MethodSet kStrMethods = methodMask({M::upper, M::lower, M::strip, M::lstrip, M::rstrip, M::split, M::join,
+                                                 M::startswith, M::endswith, M::find, M::replace, M::count, M::isdigit,
+                                                 M::isalpha, M::isspace, M::encode});
+static const MethodSet kBytesMethods = methodMask({M::decode, M::find, M::startswith, M::endswith, M::hex});
+static const MethodSet kListMethods = methodMask({M::append, M::pop, M::extend, M::index, M::count});
+static const MethodSet kDictMethods = methodMask({M::get, M::keys, M::values, M::pop});
+static const MethodSet kStreamMethods = methodMask({M::open, M::read, M::readline, M::write, M::seek, M::tell,
+                                                    M::close, M::count_lines, M::set_timeout});
+static const MethodSet kListenerMethods = methodMask({M::bind, M::threads, M::per_connection, M::limit, M::drain,
+                                                      M::start, M::stop, M::wait, M::set_timeout});
+static const MethodSet kJsonMethods = methodMask({M::value, M::toString, M::prettyPrint});
+static const MethodSet kPathMethods = methodMask({M::with_suffix, M::with_name, M::is_absolute, M::joinpath,
+                                                  M::exists, M::is_dir, M::is_file, M::iterdir, M::glob, M::rglob,
+                                                  M::mkdir, M::rmdir, M::unlink, M::rename, M::stat, M::chmod,
+                                                  M::touch, M::resolve, M::read_bytes, M::read_text, M::write_bytes,
+                                                  M::write_text});
+static const MethodSet kArchiveMethods = methodMask({M::namelist, M::infolist, M::read, M::extractall, M::writestr,
+                                                     M::write, M::close});
 
 bool Interp::hasMethod(const Value& obj, Method m) {
-    uint64_t mask = obj.isStr() ? kStrMethods : obj.isBytes() ? kBytesMethods : obj.isList() ? kListMethods
-                  : obj.isDict() ? kDictMethods : obj.isStream() ? kStreamMethods
-                  : obj.isJson() ? kJsonMethods : obj.isListener() ? kListenerMethods : 0;
-    return m != Method::None && (mask >> static_cast<unsigned>(m) & 1);
+    static const MethodSet kNone;
+    const MethodSet& mask = obj.isStr() ? kStrMethods : obj.isBytes() ? kBytesMethods : obj.isList() ? kListMethods
+                          : obj.isDict() ? kDictMethods : obj.isStream() ? kStreamMethods
+                          : obj.isJson() ? kJsonMethods : obj.isListener() ? kListenerMethods
+                          : obj.isPath() ? kPathMethods : obj.isArchive() ? kArchiveMethods : kNone;
+    return m != Method::None && mask.test(static_cast<unsigned>(m));
 }
 
 Value Interp::attribute(const Value& obj, const std::string& name, int line) const {
@@ -480,6 +598,25 @@ Value Interp::attribute(const Value& obj, const std::string& name, int line) con
         if (name == "served") return Value(static_cast<int64_t>(l.served()));
         if (name == "error") return Value::str(l.error());
         if (name == "name") return Value::str(l.describe());
+    }
+    if (obj.isPath()) {   // pure: computed from the text, no filesystem access
+        const std::string& p = obj.as<std::shared_ptr<const PathV>>()->p;
+        if (name == "name") return Value::str(pathName(p));
+        if (name == "stem") return Value::str(pathStem(p));
+        if (name == "suffix") return Value::str(pathSuffix(p));
+        if (name == "parent") return Value::path(pathParent(p));
+        if (name == "parts") {
+            std::vector<Value> out;
+            for (auto& part : pathParts(p)) out.push_back(Value::str(part));
+            return Value::list(std::move(out));
+        }
+    }
+    if (obj.isArchive()) {
+        const Archive& ar = *obj.as<std::shared_ptr<Archive>>();
+        if (name == "valid") return Value(ar.valid());
+        if (name == "error") return Value::str(ar.error());
+        if (name == "name") return Value::str(ar.path());
+        if (name == "mode") return Value::str(ar.writing() ? "w" : "r");
     }
     if (obj.isResponse()) {   // the promise: every field but `ready` waits for the request
         const Response& r = *obj.as<std::shared_ptr<Response>>();
@@ -607,6 +744,12 @@ Value Interp::streamMethod(const Value& self, Method n, Args& a, int line) {
         st.setTimeout(t);
         return Value();
     }
+    case M::count_lines: {
+        arity(*this, "count_lines", a, 0, 0, line);
+        int64_t n = 0;
+        check(st.countLines(n));
+        return Value(n);
+    }
     default: break;
     }
     raise("AttributeError", "'Stream' has no method '" + std::string(methodName(n)) + "'", line);
@@ -678,8 +821,231 @@ Value Interp::listenerMethod(const Value& self, Method n, Args& a, int line) {
     raise("AttributeError", "'Listener' has no method '" + std::string(methodName(n)) + "'", line);
 }
 
+/// @brief Is @p b valid UTF-8? (bytes.decode() and Path.read_text() share the rule.)
+static bool validUtf8(const std::string& b, size_t& bad) {
+    for (size_t i = 0; i < b.size();) {
+        auto c = static_cast<unsigned char>(b[i]);
+        size_t len = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
+        if (!len || i + len > b.size()) { bad = i; return false; }
+        for (size_t k = 1; k < len; ++k)
+            if ((static_cast<unsigned char>(b[i + k]) & 0xC0) != 0x80) { bad = i; return false; }
+        i += len;
+    }
+    return true;
+}
+
+/// @brief Build a dict from (key, value) pairs with str keys, in order.
+static Value strDict(std::initializer_list<std::pair<const char*, Value>> items) {
+    Value d = Value::dict();
+    for (auto& [k, v] : items) {
+        Value key = Value::str(k);
+        std::string ck;
+        dictKey(key, ck);
+        d.d().set(ck, key, v);
+    }
+    return d;
+}
+
+Value Interp::pathMethod(const Value& self, Method n, Args& a, int line) {
+    const std::string& p = self.as<std::shared_ptr<const PathV>>()->p;
+    auto pathArg = [&](const Value& v, const char* what) -> std::string {
+        if (v.isPath()) return v.as<std::shared_ptr<const PathV>>()->p;
+        return needStr(*this, v, what, line);
+    };
+
+    // Pure: new paths from this one's text.
+    switch (n) {
+    case M::with_suffix: {
+        arity(*this, "with_suffix", a, 1, 1, line);
+        const std::string& suf = needStr(*this, a[0], "suffix", line);
+        if (!suf.empty() && (suf[0] != '.' || suf.size() == 1 || suf.find('/') != std::string::npos))
+            raise("ValueError", "invalid suffix '" + suf + "' (it must start with '.', like \".txt\", or be empty)", line);
+        if (pathName(p).empty()) raise("ValueError", "'" + p + "' has no name to change the suffix of", line);
+        return Value::path(pathJoin(pathParent(p), pathStem(p) + suf));
+    }
+    case M::with_name: {
+        arity(*this, "with_name", a, 1, 1, line);
+        const std::string& nm = needStr(*this, a[0], "name", line);
+        if (nm.empty() || nm == "." || nm.find('/') != std::string::npos) raise("ValueError", "invalid name '" + nm + "'", line);
+        if (pathName(p).empty()) raise("ValueError", "'" + p + "' has no name to replace", line);
+        return Value::path(pathJoin(pathParent(p), nm));
+    }
+    case M::is_absolute:
+        arity(*this, "is_absolute", a, 0, 0, line);
+        return Value(pathIsAbsolute(p));
+    case M::joinpath: {
+        std::string out = p;
+        for (auto& x : a) out = pathJoin(out, pathArg(x, "path segment"));
+        return Value::path(out);
+    }
+    default: break;
+    }
+
+    barrier();   // the rest touch the filesystem: effects
+    std::string err;
+    auto check = [&](bool ok) {
+        if (!ok) raise("IOError", err, line);
+    };
+    switch (n) {
+    case M::exists: arity(*this, "exists", a, 0, 0, line); return Value(pathfs::exists(p));
+    case M::is_dir: arity(*this, "is_dir", a, 0, 0, line); return Value(pathfs::isDir(p));
+    case M::is_file: arity(*this, "is_file", a, 0, 0, line); return Value(pathfs::isFile(p));
+    case M::iterdir:
+    case M::glob:
+    case M::rglob: {
+        std::vector<std::string> found;
+        if (n == M::iterdir) {
+            arity(*this, "iterdir", a, 0, 0, line);
+            check(pathfs::iterdir(p, found, err));
+        } else {
+            arity(*this, methodName(n), a, 1, 1, line);
+            std::string pat = needStr(*this, a[0], "pattern", line);
+            if (n == M::rglob) pat = "**/" + pat;
+            check(pathfs::glob(p, pat, found, err));
+        }
+        std::vector<Value> out;
+        out.reserve(found.size());
+        for (auto& f : found) out.push_back(Value::path(f));
+        return Value::list(std::move(out));
+    }
+    case M::mkdir: {
+        arity(*this, "mkdir", a, 0, 1, line);
+        int mode = a.empty() ? -1 : static_cast<int>(needInt(*this, a[0], "mode", line));
+        if (!a.empty() && (mode < 0 || mode > 07777)) raise("ValueError", "mode must be 0..0o7777", line);
+        bool created = false;
+        check(pathfs::mkdir(p, mode, created, err));
+        return Value(created);
+    }
+    case M::rmdir: arity(*this, "rmdir", a, 0, 0, line); check(pathfs::rmdir(p, err)); return Value();
+    case M::unlink: arity(*this, "unlink", a, 0, 0, line); check(pathfs::unlink(p, err)); return Value();
+    case M::touch: arity(*this, "touch", a, 0, 0, line); check(pathfs::touch(p, err)); return Value();
+    case M::rename: {
+        arity(*this, "rename", a, 1, 1, line);
+        std::string to = pathArg(a[0], "target");
+        check(pathfs::rename(p, to, err));
+        return Value::path(to);
+    }
+    case M::chmod: {
+        arity(*this, "chmod", a, 1, 1, line);
+        int64_t mode = needInt(*this, a[0], "mode", line);
+        if (mode < 0 || mode > 07777) raise("ValueError", "mode must be 0..0o7777", line);
+        check(pathfs::chmod(p, static_cast<int>(mode), err));
+        return Value();
+    }
+    case M::stat: {
+        arity(*this, "stat", a, 0, 0, line);
+        pathfs::StatInfo st;
+        check(pathfs::stat(p, st, err));
+        return strDict({{"size", Value(st.size)}, {"mode", Value(int64_t{st.mode})}, {"perms", Value::str(st.perms)},
+                        {"mtime", Value(st.mtime)}, {"atime", Value(st.atime)}, {"ctime", Value(st.ctime)},
+                        {"uid", Value(st.uid)}, {"gid", Value(st.gid)}, {"is_dir", Value(st.isDir)},
+                        {"is_file", Value(st.isFile)}, {"is_link", Value(st.isLink)}});
+    }
+    case M::resolve: {
+        arity(*this, "resolve", a, 0, 0, line);
+        std::string out;
+        check(pathfs::resolve(p, out, err));
+        return Value::path(out);
+    }
+    case M::read_bytes:
+    case M::read_text: {
+        arity(*this, methodName(n), a, 0, 0, line);
+        std::string out;
+        check(pathfs::readAll(p, out, err));
+        if (n == M::read_bytes) return Value::bytes(std::move(out));
+        size_t bad = 0;
+        if (!validUtf8(out, bad)) raise("DecodeError", p + ": invalid UTF-8 at byte " + std::to_string(bad), line);
+        return Value::str(std::move(out));
+    }
+    case M::write_bytes:
+    case M::write_text: {
+        arity(*this, methodName(n), a, 1, 1, line);
+        const std::string& data = n == M::write_bytes ? needBytes(*this, a[0], "data", line) : needStr(*this, a[0], "text", line);
+        check(pathfs::writeAll(p, data, err));
+        if (n == M::write_text) return Value(static_cast<int64_t>(utf8Length(a[0].s())));
+        return Value(static_cast<int64_t>(data.size()));
+    }
+    default: break;
+    }
+    raise("AttributeError", "'Path' has no method '" + std::string(methodName(n)) + "'", line);
+}
+
+Value Interp::archiveMethod(const Value& self, Method n, Args& a, int line) {
+    Archive& ar = *self.as<std::shared_ptr<Archive>>();
+    barrier();   // an effect: everything before it must have happened
+    auto check = [&](bool ok) {
+        if (!ok) raise("IOError", ar.error(), line);
+    };
+    if (n == M::close) {
+        arity(*this, "close", a, 0, 0, line);
+        check(ar.close());
+        return Value();
+    }
+    if (!ar.valid()) raise("IOError", ar.error().empty() ? ar.path() + ": already closed" : ar.error(), line);
+    auto pathArg = [&](const Value& v, const char* what) -> std::string {
+        if (v.isPath()) return v.as<std::shared_ptr<const PathV>>()->p;
+        return needStr(*this, v, what, line);
+    };
+    switch (n) {
+    case M::namelist:
+    case M::infolist: {
+        arity(*this, methodName(n), a, 0, 0, line);
+        std::vector<Archive::Entry> es;
+        check(ar.list(es));
+        std::vector<Value> out;
+        for (auto& e : es) {
+            if (n == M::namelist) out.push_back(Value::str(e.name));
+            else
+                out.push_back(strDict({{"name", Value::str(e.name)}, {"size", Value(e.size)}, {"mode", Value(int64_t{e.mode})},
+                                       {"mtime", Value(e.mtime)}, {"is_dir", Value(e.isDir)}}));
+        }
+        return Value::list(std::move(out));
+    }
+    case M::read: {
+        arity(*this, "read", a, 1, 1, line);
+        const std::string& name = needStr(*this, a[0], "member name", line);
+        std::string out;
+        bool found = false;
+        check(ar.read(name, out, found));
+        if (!found) raise("KeyError", toRepr(a[0]), line);
+        return Value::bytes(std::move(out));
+    }
+    case M::extractall: {
+        arity(*this, "extractall", a, 1, 2, line);
+        std::string dest = pathArg(a[0], "destination");
+        std::vector<std::string> names, done;
+        if (a.size() == 2) {
+            if (!a[1].isList()) raise("TypeError", "extractall() member names must be a list of str", line);
+            for (auto& x : a[1].l().items) names.push_back(needStr(*this, x, "member name", line));
+        }
+        check(ar.extractAll(dest, names, done));
+        std::vector<Value> out;
+        for (auto& d : done) out.push_back(Value::str(d));
+        return Value::list(std::move(out));
+    }
+    case M::writestr: {
+        arity(*this, "writestr", a, 2, 2, line);
+        const std::string& name = needStr(*this, a[0], "member name", line);
+        if (!a[1].isStr() && !a[1].isBytes()) raise("TypeError", "writestr() data must be str or bytes, not " + typeName(a[1]), line);
+        check(ar.addBytes(name, a[1].isStr() ? a[1].s().s : a[1].b().b));
+        return Value();
+    }
+    case M::write: {
+        arity(*this, "write", a, 1, 2, line);
+        std::string path = pathArg(a[0], "path");
+        std::string arcname = a.size() == 2 ? needStr(*this, a[1], "arcname", line) : std::string();
+        check(ar.addPath(path, arcname));
+        return Value();
+    }
+    default: break;
+    }
+    raise("AttributeError", "'Archive' has no method '" + std::string(methodName(n)) + "'", line);
+}
+
 Value Interp::callMethod(const Value& self, Method n, Args& a, int line) {
     if (self.isStream()) return streamMethod(self, n, a, line);
+    if (self.isPath()) return pathMethod(self, n, a, line);
+    if (self.isArchive()) return archiveMethod(self, n, a, line);
     if (self.isListener()) return listenerMethod(self, n, a, line);
     if (self.isJson()) {
         arity(*this, methodName(n), a, 0, 0, line);

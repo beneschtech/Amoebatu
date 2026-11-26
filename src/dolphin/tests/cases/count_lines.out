@@ -1,0 +1,7 @@
+empty 0
+two 2
+unterminated 2
+blank 3
+crlf 2
+2 b'b\x0a' 4
+IOError: _tmp_count_lines/missing.txt: No such file or directory

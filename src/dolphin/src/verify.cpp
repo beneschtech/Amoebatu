@@ -375,6 +375,7 @@ public:
                 case CallSite::Kind::Method:   // methods of builtin types are pure, except Stream's
                     if (isStreamMethod(cs.method)) needs[i] |= streamRegNeeds(i, k, cs.self);
                     if (isListenerMethod(cs.method)) needs[i] |= NeedNetwork;
+                    if (isPathIOMethod(cs.method) || isArchiveMethod(cs.method)) needs[i] |= NeedIO;
                     break;
                 case CallSite::Kind::Value: {
                     const Def* f = nullptr;
@@ -518,6 +519,7 @@ private:
             const CallSite& cs = p.calls[ins::bx(ins)];
             if (cs.kind != CallSite::Kind::Builtin) return kAnyStream;
             if (cs.builtin->name == "Listener") return NeedNetwork;
+            if (cs.builtin->name == "Archive") return NeedIO;
             return cs.builtin->name == "Stream" ? streamCtorNeeds(i, w) : kAnyStream;
         };
         if (size_t w = defBefore(i, pc, r); w != SIZE_MAX) return from(w);

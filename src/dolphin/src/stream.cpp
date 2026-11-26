@@ -379,6 +379,38 @@ std::shared_ptr<Response> Stream::post(std::string body, std::string contentType
 
 // ------------------------------------------------------------------ seeking
 
+bool Stream::countLines(int64_t& n) {
+    n = 0;
+    if (!valid_) return fail(error_.empty() ? target_ + ": not open" : error_);
+    char last = '\n';
+    auto count = [&](const char* p, size_t len) {
+        const char* end = p + len;
+        while ((p = static_cast<const char*>(std::memchr(p, '\n', static_cast<size_t>(end - p))))) { ++n; ++p; }
+        if (len) last = end[-1];
+    };
+    if (kind_ == Kind::Http) {
+        if (!fetched_ && !fetch()) return false;
+        count(buf_.data() + pos_, buf_.size() - pos_);
+        if (last != '\n') ++n;
+        return true;
+    }
+    if (kind_ != Kind::File) return fail(target_ + ": count_lines() needs a file or an http(s) stream");
+    long start = -1;
+    if (seekable_) {
+        start = std::ftell(f_);
+        if (start < 0 || std::fseek(f_, 0, SEEK_SET) != 0) return fail(sysError(path_));
+    }
+    char buf[1 << 16];
+    size_t got;
+    while ((got = std::fread(buf, 1, sizeof buf, f_)) > 0) count(buf, got);
+    bool err = std::ferror(f_);
+    std::clearerr(f_);
+    if (start >= 0) std::fseek(f_, start, SEEK_SET);
+    if (err) return fail(sysError(path_));
+    if (last != '\n') ++n;
+    return true;
+}
+
 bool Stream::seek(int64_t off, int whence, int64_t& pos) {
     if (!valid_) return fail(error_.empty() ? target_ + ": not open" : error_);
     if (!seekable_) return fail(target_ + ": not seekable");

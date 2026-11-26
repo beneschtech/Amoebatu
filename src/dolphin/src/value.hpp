@@ -103,6 +103,8 @@ class Stream;
 struct Response;
 struct JsonDoc;
 class Listener;
+struct PathV;
+class Archive;
 /// @brief Tag type for `None`.
 struct NoneT {};
 
@@ -127,7 +129,8 @@ struct Value {
                            std::shared_ptr<const BoundMethod>,
                            std::shared_ptr<Future>,
                            std::shared_ptr<Stream>, std::shared_ptr<Response>,
-                           std::shared_ptr<const JsonDoc>, std::shared_ptr<Listener>>;
+                           std::shared_ptr<const JsonDoc>, std::shared_ptr<Listener>,
+                           std::shared_ptr<const PathV>, std::shared_ptr<Archive>>;
     V v;  ///< Storage.
 
     Value() : v(NoneT{}) {}                                ///< None.
@@ -148,6 +151,8 @@ struct Value {
     Value(std::shared_ptr<Response> p) : v(std::move(p)) {}
     /// A TCP / Unix-socket server. See listener.hpp.
     Value(std::shared_ptr<Listener> p) : v(std::move(p)) {}
+    /// An archive being read or written (mutable handle). See archive.hpp.
+    Value(std::shared_ptr<Archive> p) : v(std::move(p)) {}
 
     /// @brief Make a str value from UTF-8 bytes.
     static Value str(std::string s) { return Value(std::make_shared<const Str>(std::move(s))); }
@@ -165,6 +170,8 @@ struct Value {
     static Value list(std::vector<Value> items = {}) { return Value(std::make_shared<List>(List{std::move(items)})); }
     /// @brief Make a new empty dict.
     static Value dict() { return Value(std::make_shared<Dict>()); }
+    /// @brief Make a Path from text (normalized; see path.hpp).
+    static Value path(const std::string& p);
 
     template <class T> bool is() const { return std::holds_alternative<T>(v); }  ///< Holds alternative T?
     template <class T> const T& as() const { return std::get<T>(v); }            ///< Get alternative T (throws std::bad_variant_access if wrong).
@@ -182,6 +189,8 @@ struct Value {
     bool isStream() const { return is<std::shared_ptr<Stream>>(); }
     bool isResponse() const { return is<std::shared_ptr<Response>>(); }
     bool isListener() const { return is<std::shared_ptr<Listener>>(); }
+    bool isPath() const { return is<std::shared_ptr<const PathV>>(); }      ///< A filesystem path (path.hpp); immutable.
+    bool isArchive() const { return is<std::shared_ptr<Archive>>(); }
     bool isJson() const { return is<std::shared_ptr<const JsonDoc>>(); }   ///< A JSON document (json.hpp); immutable.
 
     const Str& s() const { return *as<std::shared_ptr<const Str>>(); }      ///< The str payload. Check isStr() first.

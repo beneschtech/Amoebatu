@@ -1,0 +1,21 @@
+# Stream.count_lines(): lines as readline() would return them. A file is
+# counted from its start, and its read position is left where it was.
+
+def main():
+    d = Path("_tmp_count_lines")
+    d.mkdir()
+    cases = [["empty", ""], ["two", "a\nb\n"], ["unterminated", "a\nb"], ["blank", "\n\n\n"], ["crlf", "x\r\ny\r\n"]]
+    for c in cases:
+        f = d / (c[0] + ".txt")
+        f.write_text(c[1])
+        print(c[0], Stream(f).count_lines())
+    s = Stream(d / "two.txt")
+    first = s.readline()
+    print(s.count_lines(), repr(s.readline()), s.tell())
+    try:
+        Stream(d / "missing.txt").count_lines()
+    except IOError as e:
+        print("IOError:", e.message)
+    for c in cases:
+        (d / (c[0] + ".txt")).unlink()
+    d.rmdir()

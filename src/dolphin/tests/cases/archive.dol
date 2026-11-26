@@ -1,0 +1,67 @@
+# Archive (archive.hpp): write a .tar.gz and a .zip, list, read and extract them.
+
+def remove_tree(root):
+    if not root.exists():
+        return
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            p.unlink()
+    dirs = [p for p in root.rglob("*") if p.is_dir()]
+    i = len(dirs) - 1
+    while i >= 0:
+        dirs[i].rmdir()
+        i -= 1
+    root.rmdir()
+
+def main():
+    tmp = Path("_tmp_archive")
+    remove_tree(tmp)
+    (tmp / "src" / "sub").mkdir()
+    (tmp / "src" / "sub" / "f.txt").write_text("file on disk\n")
+    (tmp / "src" / "top.txt").write_text("top\n")
+
+    w = Archive(tmp / "t.tar.gz", "w")
+    print(w.valid, w.mode, w.name)
+    w.writestr("readme.txt", "hello archive\n")
+    w.writestr("data/obs.bin", b"\x00\x01\x02")
+    w.write(tmp / "src", "src")
+    w.close()
+    w.close()
+    try:
+        w.writestr("late.txt", "x")
+    except IOError as e:
+        print("IOError:", e.message)
+
+    r = Archive(tmp / "t.tar.gz")
+    print(r.valid, r.mode, r.namelist())
+    info = r.infolist()
+    print(info[0]["name"], info[0]["size"], info[0]["is_dir"], f"{info[0]['mode']:o}", info[2]["is_dir"])
+    print(r.read("readme.txt"), r.read("data/obs.bin"), r.read("src/sub/f.txt"))
+    try:
+        r.read("nope")
+    except KeyError as e:
+        print("KeyError:", e.message)
+    print(r.extractall(tmp / "out", ["readme.txt", "src/top.txt"]))
+    print(sorted([str(p) for p in (tmp / "out").rglob("*")]))
+    print(len(r.extractall(tmp / "all")), (tmp / "all" / "src" / "sub" / "f.txt").read_text())
+
+    z = Archive(tmp / "t.zip", "w")
+    z.writestr("a.txt", "zip member")
+    z.close()
+    zr = Archive(tmp / "t.zip")
+    print(zr.namelist(), zr.read("a.txt"))
+    t2 = Archive(tmp / "plain.out", "w:tar")
+    t2.writestr("x", "y")
+    t2.close()
+    print(Archive(tmp / "plain.out").namelist())
+
+    missing = Archive(tmp / "missing.zip")
+    print(missing.valid, missing.error)
+    try:
+        missing.namelist()
+    except IOError as e:
+        print("IOError:", e.message)
+    print(Archive(tmp / "x.rar", "w").valid)
+    notarc = tmp / "src" / "top.txt"
+    print(Archive(notarc).valid)
+    remove_tree(tmp)

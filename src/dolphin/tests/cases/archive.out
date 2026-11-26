@@ -1,0 +1,16 @@
+True w _tmp_archive/t.tar.gz
+IOError: _tmp_archive/t.tar.gz: already closed
+True r ['readme.txt', 'data/obs.bin', 'src/', 'src/sub/', 'src/sub/f.txt', 'src/top.txt']
+readme.txt 14 False 644 True
+b'hello archive\x0a' b'\x00\x01\x02' b'file on disk\x0a'
+KeyError: 'nope'
+['readme.txt', 'src/top.txt']
+['_tmp_archive/out/readme.txt', '_tmp_archive/out/src', '_tmp_archive/out/src/top.txt']
+6 file on disk
+
+['a.txt'] b'zip member'
+['x']
+False _tmp_archive/missing.zip: No such file or directory
+IOError: _tmp_archive/missing.zip: No such file or directory
+False
+False

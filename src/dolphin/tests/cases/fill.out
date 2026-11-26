@@ -1,0 +1,9 @@
+300 0 19900 950085 149512771
+True True
+caught: bad record 37 i = 37 around: 72 -1 -1
+0 72 -1 -1
+IndexError: list assignment index out of range i = 10 last: 18
+{'a': 19900, 'bb': 39800, 'ccc': 59700}
+49504853 [1, 2, 4, 8, 16]
+[None, None, None] ['x', 'x'] [] [None, None]
+ValueError: array() size must not be negative
