@@ -1,0 +1,13 @@
+False 0 0
+True True
+True True
+b'got tcp 0\x0a' b'got unix 0\x0a'
+b'got tcp 1\x0a' b'got unix 1\x0a'
+b'got tcp 2\x0a' b'got unix 2\x0a'
+RuntimeError: a Listener can only be configured before start()
+RuntimeError: this Listener was already started (make a new one to listen again)
+False 0 2
+False
+False
+TypeError: start() takes a function (def handler(conn): ...), not builtin
+ValueError: port must be 0..65535

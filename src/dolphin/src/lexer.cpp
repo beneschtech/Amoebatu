@@ -204,9 +204,9 @@ std::vector<Token> Lexer::run() {
                 i = j;
                 std::string s = readString(i, raw);
                 Tok k = isBytes ? Tok::Bytes : (isF ? Tok::FStr : Tok::Str);
-                if (isBytes)
-                    for (unsigned char ch : s)
-                        if (ch >= 0x80) error("bytes literal may only contain ASCII; use \\x escapes");
+                if (isBytes)   // the source text, not the decoded value: b"\\xff" is fine
+                    for (size_t q = j; q < i; ++q)
+                        if (static_cast<unsigned char>(src_[q]) >= 0x80) error("bytes literal may only contain ASCII; use \\x escapes");
                 out.push_back(Token{k, std::move(s), startLine, col(start)});
                 continue;
             }

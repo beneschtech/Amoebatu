@@ -1,0 +1,4 @@
+decode	pure	parallel
+encode	pure	parallel
+shift	pure	parallel
+<module>	pure

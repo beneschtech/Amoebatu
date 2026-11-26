@@ -35,6 +35,7 @@
 #include <set>
 
 #include "dcl.hpp"
+#include "stream.hpp"
 #include "value.hpp"
 
 namespace dolphin {
@@ -367,9 +368,14 @@ public:
                 if (op != OpCode::CALL && op != OpCode::SPAWN && op != OpCode::PMAP) continue;
                 const CallSite& cs = pc.calls[ins::bx(pc.code[k])];
                 switch (cs.kind) {
-                case CallSite::Kind::Builtin: needs[i] |= cs.builtin->needs; break;
+                case CallSite::Kind::Builtin:
+                    needs[i] |= cs.builtin->name == "Stream" ? streamCtorNeeds(i, k) : cs.builtin->needs;
+                    break;
                 case CallSite::Kind::Function: callees[i].insert(index_.at(cs.def)); break;
-                case CallSite::Kind::Method: break;   // methods of builtin types are pure
+                case CallSite::Kind::Method:   // methods of builtin types are pure, except Stream's
+                    if (isStreamMethod(cs.method)) needs[i] |= streamRegNeeds(i, k, cs.self);
+                    if (isListenerMethod(cs.method)) needs[i] |= NeedNetwork;
+                    break;
                 case CallSite::Kind::Value: {
                     const Def* f = nullptr;
                     if (!knownCallee(i, k, cs.self, f)) needs[i] |= NeedAll;   // unknown callee: worst case
@@ -487,6 +493,44 @@ private:
             }
         }
     }
+    static constexpr unsigned kAnyStream = NeedIO | NeedNetwork;
+
+    /// Needs of the `Stream(...)` call at @p k: exact when its argument is a string constant
+    /// (analyzer.cpp streamCtorNeeds()).
+    unsigned streamCtorNeeds(size_t i, size_t k) const {
+        const PCode& p = *p_.code[i];
+        const CallSite& cs = p.calls[ins::bx(p.code[k])];
+        if (cs.args.size() != 1 || !cs.kwNames.empty()) return kAnyStream;
+        size_t w = defBefore(i, k, cs.args[0]);
+        if (w == SIZE_MAX || ins::op(p.code[w]) != OpCode::LOADK) return kAnyStream;
+        const Value& v = p.consts[ins::bx(p.code[w])];
+        return v.isStr() ? Stream::needsFor(v.s().s) : kAnyStream;
+    }
+    /// Needs of a Stream method on register @p r at @p pc: one kind if every value that can
+    /// reach it comes from `Stream(constant)` of that kind (directly or through MOVEs).
+    unsigned streamRegNeeds(size_t i, size_t pc, unsigned r, int depth = 0) const {
+        if (depth > 8) return kAnyStream;
+        const PCode& p = *p_.code[i];
+        auto from = [&](size_t w) -> unsigned {
+            uint32_t ins = p.code[w];
+            if (ins::op(ins) == OpCode::MOVE) return streamRegNeeds(i, w, ins::b(ins), depth + 1);
+            if (ins::op(ins) != OpCode::CALL) return kAnyStream;
+            const CallSite& cs = p.calls[ins::bx(ins)];
+            if (cs.kind != CallSite::Kind::Builtin) return kAnyStream;
+            if (cs.builtin->name == "Listener") return NeedNetwork;
+            return cs.builtin->name == "Stream" ? streamCtorNeeds(i, w) : kAnyStream;
+        };
+        if (size_t w = defBefore(i, pc, r); w != SIZE_MAX) return from(w);
+        if (r < p_.defs[i]->params.size() || writers_[i][r].empty()) return kAnyStream;   // the caller's, or unknown
+        unsigned k = 0;
+        for (size_t w : writers_[i][r]) {
+            unsigned n = from(w);
+            if (k && n != k) return kAnyStream;
+            k = n;
+        }
+        return k;
+    }
+
     /// What the callee register of a Value call at @p pc holds, if known:
     /// a function (@p fn set) or an exception class (returns true with fn null).
     bool knownCallee(size_t i, size_t pc, unsigned r, const Def*& fn) const {

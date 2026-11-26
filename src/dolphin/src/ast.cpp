@@ -68,7 +68,10 @@ const char* opSpelling(Op op) {
 
 // -------------------------------------------------------------- method codes
 
-static const char* const kMethodNames[] = {"", "upper", "lower", "strip", "lstrip", "rstrip", "split", "join", "startswith", "endswith", "find", "replace", "count", "isdigit", "isalpha", "isspace", "encode", "decode", "hex", "append", "pop", "extend", "index", "get", "keys", "values"};
+static const char* const kMethodNames[] = {"", "upper", "lower", "strip", "lstrip", "rstrip", "split", "join", "startswith", "endswith", "find", "replace", "count", "isdigit", "isalpha", "isspace", "encode", "decode", "hex", "append", "pop", "extend", "index", "get", "keys", "values",
+    "open", "read", "readline", "write", "seek", "tell", "close", "set_timeout",
+    "value", "toString", "prettyPrint",
+    "bind", "threads", "per_connection", "limit", "drain", "start", "stop", "wait"};
 
 Method methodByName(const std::string& name) {
     for (size_t i = 1; i < sizeof kMethodNames / sizeof *kMethodNames; ++i)

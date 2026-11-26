@@ -1,0 +1,67 @@
+# JSON documents: loading, values, text, bytes as data URIs, errors.
+def main():
+    j = JSON()
+    print(j.toString(), type(j))
+
+    j << '{"name": "KBCB", "temp": 14.5, "ok": true, "gust": null, "layers": [{"cov": "BKN", "ft": 3400}, 7]}'
+    print(j.toString())
+    print(j)
+    d << j
+    print(d["name"], d["temp"], d["ok"], d["gust"], d["layers"][0]["ft"], type(d))
+    print(j.value() == d)
+
+    a = JSON() << [1, 2.5, "x", None, True]
+    print(a.toString())
+    lst << a
+    print(lst, type(lst))
+    try:
+        a << [1, [2]]
+    except TypeError as e:
+        print("TypeError:", e.message)
+    try:
+        a << [{"k": 1}]
+    except TypeError as e:
+        print("TypeError:", e.message)
+
+    rec = {"station": "KBCB", "obs": [{"t": 1, "v": [1, 2]}, None], "raw": b"\x89PNG\r\n\x1a\nxyz", "n": -3}
+    r = JSON(rec)
+    print(r.toString())
+    print(r.prettyPrint())
+    back << r
+    print(back["raw"], back["raw"] == rec["raw"], back == rec)
+
+    img = JSON() << b"\xff\xd8\xff\xe0abc"
+    print(img)
+    print(img.value())
+    print((JSON() << b"hi").toString())
+
+    for bad in ['{"a": }', '[1, 2', '{"a": 1} trailing', '']:
+        try:
+            JSON(bad)
+        except JSONError as e:
+            print("JSONError:", e.message)
+    try:
+        JSON('nope')
+    except ValueError as e:
+        print("caught as ValueError:", e.kind)
+
+    try:
+        JSON({1: "x"})
+    except TypeError as e:
+        print("TypeError:", e.message)
+    try:
+        JSON(5)
+    except TypeError as e:
+        print("TypeError:", e.message)
+
+    copy = JSON(j)
+    print(copy == j, copy.toString() == j.toString())
+    k = j
+    j << "[3]"
+    print(j, k == copy)
+
+    n = 3
+    n << 2
+    print(n)
+    s = JSON('"just a string"')
+    print(s.value(), JSON("42").value() + 1, JSON('"data:text/plain;base64,aGk="').value())
