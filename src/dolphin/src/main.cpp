@@ -110,6 +110,12 @@ static int runWithStats(Interp& interp, const std::vector<std::string>& args, bo
     return rc;
 }
 
+static int showVersion() {
+   std::cout << "Dolphin compiler/runner" << std::endl;
+   std::cout << "Part of the Ameobatu software suite, version " AMOEBATU_VERSION << std::endl;
+   return 0;
+}
+
 int main(int argc, char** argv) {
     std::string mode = "run";
     unsigned threads = 0;
@@ -133,6 +139,9 @@ int main(int argc, char** argv) {
         }
         if (std::strncmp(argv[i], "--", 2) != 0) return usage();
         std::string opt = argv[i] + 2;
+        if (opt == "version") {
+            return showVersion();
+        }
         if (opt == "strip") {
             strip = true;
         } else if (opt == "tokens" || opt == "ast" || opt == "needs" || opt == "check" || opt == "disasm") {
